@@ -37,6 +37,8 @@
 - 结论：AI 落点=①关闭型仓发 issue 分析②自有 AI 仓（变资产）③<5k star niche 库。
 
 ## 环境事实（每次新会话必读）
+- ★ **本地 clone 一律视为过期**：改文件前先 GET 远端原文 → 套精确替换 → 断言 `count==1` → 再推。断言炸了就说明版本差（11-02 差点把远端 201 项测试的文档写回 191）。
+- ★ `codeload` tar.gz 有 CDN 缓存，刚推完下载会拿到旧文件；核验最新内容走 Contents API。
 - `git` 现已可用（`/mingw64/bin/git`，github.com:443 握手失败已消失）——走标准 fork→clone→push→POST /pulls。
 - `_sdk_env`：`D:/github/_sdk_env/Scripts/python.exe`（3.12 venv；无 uv/mypy/cargo；ruff 已装）。
 - 克隆免 git：`curl -sL -o x.tgz https://codeload.github.com/<owner>/<repo>/tar.gz/refs/heads/<branch>`。
