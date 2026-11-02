@@ -1159,3 +1159,10 @@ mtree）看似同病，但两条调用链都会先
 - 关键事实：develop 早已含"uncertain → 不报 complete"的等价修复，本轮补的是**跨 pass 持久化**（下一次无待比对项时不再回到 complete），否则 #33 只是重复造轮子。
 - 环境变更：github.com:443 直连超时，git push/pull 不可用；仅 api.github.com 与 codeload 通。fork develop 已用 `/merges` 同步到上游 `8d0c906`（→ `f760ad10`）。
 - 遗留：#29 仍 `dirty`，需同样方式合 develop，再补双后端故障/重试断言、CHANGELOG/HANDOFF 口径修正、`ruff format` runtime.py；三仓累计仍 0 合并 / 33 open，不新开 PR、不催。
+
+## 2026-11-02 17:05 — 会话归档（持久化到 `TrueFurina/github-notes`）
+
+- 本机是实验室机器，关机即重置、本地目录清空。已把 `autopilot/LEDGER.md`、`autopilot/_prs/`（脚本与三条 PR 正文副本）、
+  `autopilot/R2-会话收尾-2026-11-02.md` 推到 `TrueFurina/github-notes@7157ce7`（38 个文件新增、0 删除，`force=False`，逐文件读回复核）。
+- 三条候选 PR 的提交与正文本就在 GitHub（`#2731` / `#197` / `#30` 均 open、merged=False，head 见 R2 条），无需再推。
+- 边界未变：未 merge、未 force-push、未关闭任何 PR、未新增 PR。本会话到此收尾；账本后续由值守会话继续追加。
