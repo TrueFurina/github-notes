@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+*.local
+*.tsbuildinfo
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment
+.env
+.env.local
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Data files (uploaded schedules kept local)
+backend/app/data/
+schedule.xlsx
+(2024-2025-2)课表.pdf
+
+# WorkBuddy 本地记忆：个人工作日志，含真实联系人 PII / 会议转写，不入库
+# （应用注册信息 .workbuddy/applications.yaml 需保留，故只忽略 memory 子目录）
+.workbuddy/memory/
+
+# Scratch
+server.log
+server.err.log
+.tmp/
+.box-agent-scratch/
+.workbuddy-ai/
+
+# Tool caches（ruff/pytest 虽在各自目录内自写 .gitignore，显式忽略双保险：
+# 换平台/换版本时自写机制失效也不会误提交缓存垃圾）
+.ruff_cache/
+.pytest_cache/
+.wbapp_*.genie

@@ -1,0 +1,13 @@
+{
+  "note": "零 await 的 async 路由基线（只允许减少，新增需显式更新）",
+  "routes": [
+    "/admin-login  admin_login",
+    "/demo-mode  demo_mode",
+    "/parallel/export  parallel_export",
+    "/requests  clear_requests",
+    "/requests  create_request",
+    "/requests  list_requests",
+    "/requests/export  export_requests",
+    "/status  get_status"
+  ]
+}

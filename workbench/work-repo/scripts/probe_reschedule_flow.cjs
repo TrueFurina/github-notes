@@ -1,0 +1,335 @@
+/**
+ * 调课沙盘（③ 选择时间）UI 点测 —— 只读，不改任何数据
+ *
+ * 为什么单独一个探针：`probe_ui_flow.cjs` 覆盖的是「首屏 → 我的课程 → 并行排课 →
+ * 看板 → 咨询」，恰好**跳过**了整个产品的主路径第 ③ 步（选时间/沙盘）。
+ * 而这一步是教秘真干活的地方：三重冲突的结果、排除原因、影响分析、提交守卫。
+ * 这段代码没有单测能替（要靠真实接口数据渲染），所以用浏览器点。
+ *
+ * 覆盖：
+ *   1. 进入沙盘（模板表单 + 周课表网格）
+ *   2. 可用时段 / 被排除时段都有内容（冲突筛选真的跑了）
+ *   3. 切换目标周次会重新查询，且不留旧数据
+ *   4. 影响分析能算出冲突面（含自身冲突分栏）
+ *   5. 未登录点提交 → 出现云端登录弹窗（不能静默失败）
+ *   6. 全程 JS 错误 / 失败请求
+ *
+ * 用法：SITE=http://127.0.0.1:8023/ npm run probe:reschedule
+ */
+const { launch } = require('./_browser.cjs');
+const path = require('path');
+
+const SITE = process.env.SITE || 'https://physics-scheduler.app.workbuddy.host/';
+const SHOT_DIR = process.env.PROBE_SHOT_DIR || path.join(require('os').tmpdir(), 'psprobe');
+const TEACHER = process.env.PROBE_TEACHER || '吴琳';
+
+const results = [];
+function rec(ok, name, detail, opts = {}) {
+  const status = opts.skip ? 'SKIP' : ok ? 'PASS' : 'FAIL';
+  results.push({ ok, skip: !!opts.skip, name, detail });
+  console.log(`${status}  ${name}  — ${detail}`);
+}
+
+const text = (page) => page.evaluate(() => document.body.innerText);
+
+(async () => {
+  const browser = await launch();
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const page = await ctx.newPage();
+
+  const jsErrors = [];
+  const failedReq = [];
+  page.on('pageerror', (e) => jsErrors.push(String(e).slice(0, 160)));
+  page.on('requestfailed', (r) => {
+    const u = r.url();
+    if (!/res\.wx\.qq\.com|open\.weixin|workbuddy\.cn/.test(u)) failedReq.push(`${u.slice(0, 90)} ${r.failure()?.errorText}`);
+  });
+  // 4xx/5xx 也算失败：接口 500 时界面往往只显示一句"加载失败"，页面看着"正常"
+  page.on('response', (r) => {
+    const u = r.url();
+    if (u.includes('/api/') && r.status() >= 400) failedReq.push(`${r.status()} ${u.slice(0, 90)}`);
+  });
+
+  await page.goto(SITE, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForSelector('text=物理实验调课辅助', { timeout: 60000 });
+
+  // ① 选身份 → 我的课程
+  let ok = false;
+  try {
+    await page.locator('button', { hasText: TEACHER }).first().click();
+    await page.waitForFunction(() => /当前教师：/.test(document.body.innerText), null, { timeout: 30000 });
+    ok = true;
+  } catch (e) {
+    rec(false, '前置：进入我的课程', String(e).slice(0, 100));
+  }
+  if (!ok) {
+    rec(false, '调课沙盘链路', '前置步骤失败，后续无法进行');
+    await browser.close();
+    console.log('\n=== 汇总：0/1 通过 ===');
+    process.exit(1);
+  }
+
+  // ② 点第一门可调课程 → 进入沙盘
+  let availCount = 0;
+  let exclCount = 0;
+  let sandboxMs = 0;
+  try {
+    const t1 = Date.now();
+    await page.getByRole('button', { name: /申请调课/ }).first().click();
+    await page.waitForFunction(() => /调课申请 · 模板表单/.test(document.body.innerText), null, { timeout: 30000 });
+    // 沙盘"画出来"的标志是可用/排除时段已带数字（此时数据已到）
+    await page.waitForFunction(() => /可用时段（\d+）/.test(document.body.innerText), null, { timeout: 30000 });
+    sandboxMs = Date.now() - t1;
+    await page.waitForTimeout(300);
+    const t = await text(page);
+    const mAvail = t.match(/可用时段（(\d+)）/);
+    const mExcl = t.match(/被排除时段（(\d+)）/);
+    availCount = mAvail ? Number(mAvail[1]) : 0;
+    exclCount = mExcl ? Number(mExcl[1]) : 0;
+
+    // 沙盘网格：绿格 = 可用。直接数 DOM，避免被文案骗过。
+    // ⚠️ 这里**不断红格**：网格按 (天,时段) 聚合且 available 优先渲染——
+    // excluded 是房间级冲突（A504 被占），available 是同时段其他房可用
+    // （A410/A411），12 条排除全部落在"同时段有可用房"的格子里 ⇒ 红格恒 0
+    // （2026-10-24 实测断言 cells.red>0 必红，是判据与聚合语义不符，非产品缺陷）。
+    // 排除时段的渲染判据在列表区（🚫 被排除时段）：行数必须与标题数字一致，
+    // 防"标题有数字但列表空"的假绿。
+    const cells = await page.evaluate(() => ({
+      green: document.querySelectorAll('.bg-green-50.border-green-200').length,
+    }));
+    const exclRows = await page.evaluate(() =>
+      document.querySelectorAll('.text-red-400.ml-7').length);
+    // 阈值 2s：首屏请求走 fast=true（规则解析，实测 25ms），若误改回 fast=false
+    // 会退回 LLM 候选生成（实测 7.6s），这一项立刻变红。
+    rec(
+      availCount > 0 && exclCount > 0 && cells.green > 0 && exclRows === exclCount && sandboxMs < 2000,
+      '③ 调课沙盘',
+      `${sandboxMs}ms 出沙盘：可用 ${availCount} / 排除 ${exclCount}（网格 绿${cells.green}，排除列表 ${exclRows}/${exclCount} 行）`,
+    );
+    await page.screenshot({ path: path.join(SHOT_DIR, 'reschedule-sandbox.png'), fullPage: true });
+  } catch (e) {
+    rec(false, '③ 调课沙盘', String(e).slice(0, 120));
+  }
+
+  // ③ 切周次 → 必须重查（可用时段数量应变化，至少不能沿用上一条数据）
+  try {
+    const before = await page.evaluate(() => (document.body.innerText.match(/可用时段（(\d+)）/) || [])[1]);
+    await page.getByRole('combobox').first().selectOption({ label: '第4周' });
+    await page.waitForFunction(() => /周课表沙盘（第4周）/.test(document.body.innerText), null, { timeout: 20000 });
+    await page.waitForTimeout(800);
+    const after = await page.evaluate(() => (document.body.innerText.match(/可用时段（(\d+)）/) || [])[1]);
+    rec(true, '🔄 切换目标周次', `第2周起手 ${before} 个可用 → 第4周 ${after} 个可用（标题已切到第4周）`);
+    await page.screenshot({ path: path.join(SHOT_DIR, 'reschedule-week4.png'), fullPage: true });
+  } catch (e) {
+    rec(false, '🔄 切换目标周次', String(e).slice(0, 120));
+  }
+
+  // ④ 影响分析
+  try {
+    const t2 = Date.now();
+    await page.getByRole('button', { name: /分析影响范围/ }).first().click();
+    await page.waitForFunction(() => /共 \d+ 处冲突/.test(document.body.innerText), null, { timeout: 30000 });
+    const impactMs = Date.now() - t2;
+    await page.waitForTimeout(400);
+    const t = await text(page);
+    const m = t.match(/共 (\d+) 处冲突/);
+    const selfBusy = /您本人在这些时段已有课（(\d+) 处）/.exec(t);
+    // 反回归：班级名不许出现在「相关教师」栏里
+    const teacherLine = (t.match(/相关教师（该时段在用这些教室）\n([^\n]+)/) || [])[1] || '';
+    const classLeak = /班/.test(teacherLine);
+    // 阈值 2.5s：AI 候选方案正在后台调 LLM（7.6s），若后端没把阻塞活丢进线程池，
+    // 这里会被拖到 8~10s（实测过 9.4s）—— 这个数字就是"全站被冻住"的探针。
+    rec(
+      Boolean(m) && !classLeak && impactMs < 2500,
+      '🎯 影响分析',
+      `${impactMs}ms（AI 候选后台占着 LLM 时不排队），共 ${m ? m[1] : '?'} 处冲突` +
+        `；相关教师栏「${teacherLine.slice(0, 40)}」${classLeak ? '（含班级名，越界！）' : ''}` +
+        `；自身冲突 ${selfBusy ? selfBusy[1] + ' 处（已分栏）' : '无'}`,
+    );
+    await page.screenshot({ path: path.join(SHOT_DIR, 'reschedule-impact.png'), fullPage: true });
+  } catch (e) {
+    rec(false, '🎯 影响分析', String(e).slice(0, 120));
+  }
+
+  // ⑥ AI 候选方案 —— PRD 验收标准（F9：候选 ≥2 个）与演示脚本旁白都承诺的画面。
+  //    历史上后端一直在算，前端从来没渲染过：旁白在念一个屏幕上看不见的东西。
+  try {
+    const t3 = Date.now();
+    // 等**卡片**而不是标题：标题在"正在挑候选…"占位时就已经在了（第一版探针就栽在这）
+    await page.waitForFunction(() => /方案 1/.test(document.body.innerText), null, { timeout: 60000 });
+    await page.waitForTimeout(300);
+    const t = await text(page);
+    const planCount = (t.match(/方案 \d/g) || []).length;
+    const hasReason = /空闲|无课|间隔|推荐/.test(t);
+    rec(planCount >= 2, '🤖 AI 候选方案', `${Date.now() - t3}ms 内出现 ${planCount} 个候选（PRD 要求 ≥2），附推荐理由：${hasReason ? '有' : '无'}`);
+    await page.screenshot({ path: path.join(SHOT_DIR, 'reschedule-ai-plans.png'), fullPage: true });
+  } catch (e) {
+    rec(false, '🤖 AI 候选方案', `60s 内没渲染出候选方案（演示脚本第 4 步会翻车）：${String(e).slice(0, 100)}`);
+  }
+
+  // ⑤ 未登录提交 → 必须弹出云端登录（静默失败是最糟的体验）
+  try {
+    await page.getByRole('button', { name: /提交调课申请/ }).first().click();
+    await page.waitForFunction(() => /云端登录/.test(document.body.innerText), null, { timeout: 15000 });
+    const hasPhone = await page.locator('input[placeholder="手机号"]').count();
+    rec(hasPhone > 0, '🔐 未登录提交守卫', `弹出云端登录弹窗，手机号输入框 ${hasPhone} 个`);
+    await page.screenshot({ path: path.join(SHOT_DIR, 'reschedule-login-guard.png') });
+  } catch (e) {
+    rec(false, '🔐 未登录提交守卫', `点提交后没看到登录弹窗（疑似静默失败）：${String(e).slice(0, 100)}`);
+  }
+
+  // ⑦ 自然语言调课（B1/B2）—— PRD 主打的"说人话就能调课"，此前零覆盖
+  //
+  // 为什么单独开一页：上面这页已经弹了登录遮罩，状态不干净。
+  //
+  // 这一项卡的是"解析成功但界面空白"：`handleNlReschedule` 里 `setView('reschedule')`
+  // 而沙盘的渲染条件是 `view === 'reschedule' && selectedCourse`，自然语言路径
+  // **从来没设置过 selectedCourse** ⇒ 后端算出了几十个可用时段，教秘看到的是一片空白。
+  try {
+    const p2 = await ctx.newPage();
+    p2.on('pageerror', (e) => jsErrors.push('[nl] ' + String(e).slice(0, 150)));
+    p2.on('response', (r) => {
+      const u = r.url();
+      if (u.includes('/api/') && r.status() >= 400) failedReq.push(`[nl] ${r.status()} ${u.slice(0, 80)}`);
+    });
+    await p2.goto(SITE, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await p2.waitForSelector('text=物理实验调课辅助', { timeout: 60000 });
+    await p2.locator('button', { hasText: TEACHER }).first().click();
+    await p2.waitForFunction(() => /当前教师：/.test(document.body.innerText), null, { timeout: 30000 });
+
+    const t4 = Date.now();
+    await p2.locator('input[placeholder="输入大白话调课需求..."]').fill(`我是${TEACHER}，把声速测量调到第3周`);
+    await p2.getByRole('button', { name: /^发送$/ }).click();
+    // 等"沙盘真的画出来"：周次标题 + 可用时段计数都出现才算数
+    await p2.waitForFunction(
+      () => /周课表沙盘（第3周）/.test(document.body.innerText) && /可用时段（\d+）/.test(document.body.innerText),
+      null, { timeout: 30000 },
+    );
+    const nlMs = Date.now() - t4;
+    const t = await p2.evaluate(() => document.body.innerText);
+    const mAvail = t.match(/可用时段（(\d+)）/);
+    const hasCourse = new RegExp(`课程：声速测量`).test(t);
+    // 课程没能唯一确定时（同名实验挂在多个班下），沙盘必须给出下拉让教秘补选 ——
+    // "画出来但没法提交"和"白屏"只是同一件事的两个版本。
+    const courseOpts = await p2.evaluate(() => {
+      const sel = [...document.querySelectorAll('select')]
+        .find((s) => (s.options[0]?.textContent || '').includes('选择课程'));
+      return sel ? sel.options.length - 1 : 0;
+    });
+    // 阈值 3s：自然语言这条链路本身要过规则解析（厘秒级）；若误传 fast=false，
+    // 会白等一次 LLM 候选生成（7.6s）—— 而候选在这条路径上根本没被渲染。
+    rec(
+      Boolean(mAvail) && (hasCourse || courseOpts > 0) && nlMs < 3000,
+      '💬 自然语言调课进沙盘',
+      `${nlMs}ms：可用 ${mAvail ? mAvail[1] : '?'} 个；` +
+        (hasCourse ? '课程「声速测量」已自动带入' : `课程同名跨班无法唯一确定 → 提供 ${courseOpts} 门可选`),
+    );
+    await p2.screenshot({ path: path.join(SHOT_DIR, 'nl-reschedule.png'), fullPage: true });
+  } catch (e) {
+    const body = await ctx.pages().at(-1)?.evaluate(() => document.body.innerText).catch(() => '');
+    rec(
+      false,
+      '💬 自然语言调课进沙盘',
+      `解析成功后没渲染出沙盘（界面可能空白）：${String(e).slice(0, 100)}｜当前可见：${String(body).replace(/\s+/g, ' ').slice(0, 120)}`,
+    );
+  }
+
+  // ⑧ 多轮追问（B2）—— 教秘按提示回答后，系统不许把刚说过的话再问一遍
+  //
+  // 这一项用"帮我调课"起手：规则解析拿不到周次、无论 LLM 在不在都会走追问分支，
+  // 所以它不是一条依赖外部服务的检查。历史上服务端每轮从零解析，"我是吴琳"那轮
+  // 会把"您是哪位老师"原样再问一遍（实测），界面上却写着"我会继续为您处理"。
+  try {
+    const p3 = await ctx.newPage();
+    p3.on('pageerror', (e) => jsErrors.push('[nl2] ' + String(e).slice(0, 150)));
+    p3.on('response', (r) => {
+      const u = r.url();
+      if (u.includes('/api/') && r.status() >= 400) failedReq.push(`[nl2] ${r.status()} ${u.slice(0, 80)}`);
+    });
+    await p3.goto(SITE, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await p3.waitForSelector('text=物理实验调课辅助', { timeout: 60000 });
+    await p3.locator('button', { hasText: TEACHER }).first().click();
+    await p3.waitForFunction(() => /当前教师：/.test(document.body.innerText), null, { timeout: 30000 });
+
+    const input = p3.locator('input[placeholder="输入大白话调课需求..."]');
+    await input.fill('帮我调课');
+    await p3.getByRole('button', { name: /^发送$/ }).click();
+    await p3.waitForFunction(() => /需要补充信息/.test(document.body.innerText), null, { timeout: 45000 });
+    await p3.waitForTimeout(300);
+    const t1 = await p3.evaluate(() => document.body.innerText);
+    const remembered = (t1.match(/已记住：([^\n]*)/) || [])[1] || '';
+    // 教师身份界面上已经选过了 ⇒ 追问里再问"哪位老师"就是复读
+    const reAskedTeacher = /哪位老师/.test(t1);
+    rec(
+      remembered.includes('教师') && !reAskedTeacher,
+      '🧠 多轮追问记住上下文',
+      `追问已记住「${remembered.slice(0, 40)}」，且不再重复问教师${reAskedTeacher ? '（又问了！）' : ''}`,
+    );
+    await p3.screenshot({ path: path.join(SHOT_DIR, 'nl-followup.png'), fullPage: true });
+
+    // 第二轮只补周次 —— 应当直接出沙盘，而不是再来一次追问
+    const t5 = Date.now();
+    await input.fill('我要调到第3周');
+    await p3.getByRole('button', { name: /^发送$/ }).click();
+    await p3.waitForFunction(
+      () => /周课表沙盘（第3周）/.test(document.body.innerText) && /可用时段（\d+）/.test(document.body.innerText),
+      null, { timeout: 45000 },
+    );
+    rec(true, '🧠 第二轮补一句就出结果', `${Date.now() - t5}ms 出沙盘（教秘只说了"我要调到第3周"）`);
+    await p3.screenshot({ path: path.join(SHOT_DIR, 'nl-multiturn.png'), fullPage: true });
+  } catch (e) {
+    rec(false, '🧠 多轮追问记住上下文', `追问后没走通第二轮：${String(e).slice(0, 110)}`);
+  }
+
+  // ⑨ 超出周次范围（R-32）—— 必须**拒绝并说清范围**，不许画出一份假沙盘
+  //
+  // 为什么用第99周而不是第-1周：负数走的是 LLM 解析分支（规则正则不认 "-"），
+  // 探针会因此依赖外部模型，时好时坏。第99周走确定性的规则分支，能稳定验证
+  // "越界不静默夹取"这条语义（修之前它会被悄悄夹成第16周，界面画得跟真的一样）。
+  try {
+    const p4 = await ctx.newPage();
+    p4.on('pageerror', (e) => jsErrors.push('[nl3] ' + String(e).slice(0, 150)));
+    await p4.goto(SITE, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await p4.waitForSelector('text=物理实验调课辅助', { timeout: 60000 });
+    await p4.locator('button', { hasText: TEACHER }).first().click();
+    await p4.waitForFunction(() => /当前教师：/.test(document.body.innerText), null, { timeout: 30000 });
+
+    await p4.locator('input[placeholder="输入大白话调课需求..."]').fill(`我是${TEACHER}，把声速测量调到第99周`);
+    await p4.getByRole('button', { name: /^发送$/ }).click();
+    await p4.waitForFunction(
+      () => /不在实验安排表范围内/.test(document.body.innerText),
+      null, { timeout: 30000 },
+    );
+    await p4.waitForTimeout(400);
+    const t = await p4.evaluate(() => document.body.innerText);
+    const range = (t.match(/本表覆盖第(\d+)[–-](\d+)周/) || []);
+    const drewSandbox = /周课表沙盘（/.test(t);
+    rec(
+      range.length === 3 && !drewSandbox,
+      '🚧 超出周次范围被拦住',
+      `提示「本表覆盖第${range[1] || '?'}–${range[2] || '?'}周」，` +
+        (drewSandbox ? '但仍画出了沙盘（假结果！）' : '未画出沙盘'),
+    );
+    await p4.screenshot({ path: path.join(SHOT_DIR, 'nl-week-out-of-range.png'), fullPage: true });
+  } catch (e) {
+    const body = await ctx.pages().at(-1)?.evaluate(() => document.body.innerText).catch(() => '');
+    rec(
+      false,
+      '🚧 超出周次范围被拦住',
+      `越界周次没有被明确拒绝：${String(e).slice(0, 100)}｜当前可见：${String(body).replace(/\s+/g, ' ').slice(0, 120)}`,
+    );
+  }
+
+  rec(jsErrors.length === 0, '全程 JS 错误', `${jsErrors.length} 条${jsErrors.length ? '：' + jsErrors[0] : ''}`);
+  rec(failedReq.length === 0, '全程失败请求', `${failedReq.length} 条${failedReq.length ? '：' + failedReq[0] : ''}`);
+
+  await browser.close();
+  const skipped = results.filter((r) => r.skip).length;
+  const pass = results.filter((r) => r.ok && !r.skip).length;
+  const total = results.length - skipped;
+  console.log(`\n=== 汇总：${pass}/${total} 通过${skipped ? `（另有 ${skipped} 项跳过）` : ''} ===`);
+  process.exit(pass === total ? 0 : 1);
+})().catch((e) => {
+  console.error('探针异常：', e);
+  process.exit(2);
+});

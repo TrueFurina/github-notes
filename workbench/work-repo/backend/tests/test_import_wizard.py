@@ -1,0 +1,618 @@
+"""导入向导：预览（只读）→ 确认导入 —— R-63 数据导入向导
+
+要锁的洞
+--------
+1. **预览绝不写入**：两个预览端点跑完，主数据五张表、`_master_tasks`、
+   `db.pending` 必须原样。反向验证（R-33 的用法）：把"预览其实偷偷 apply 了"
+   这个 bug 放回代码，本文件相关用例必须红 —— 只断言"接口返回 success"
+   会假绿（预览成功≠预览无副作用）。
+2. **预览数字 == 导入数字**：同一份文件，预览报的 rows 之和与导入 stats 的
+   rows 之和相等。预览与写库共用 `parse_workbook` / `_row_to_rec` /
+   `parse_master_tasks`，这条锁的是"两套解析代码慢慢漂移"的回归。
+3. **映射必须可见**：字段 ← 列名、没认出的列、统计列忽略、样本行，都要在
+   报告里说出口（R-34：认不出就报，不静默半导入）。
+4. **鉴权边界与写入一致**：免鉴权白名单里没有预览端点。
+5. **清单预览**：列名千奇百怪也能映射；缺「班级/实验项目」→ 400 说清缺什么；
+   预览不碰 db.pending。
+"""
+
+import io
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+import openpyxl
+
+from app import master_store
+from app.master_data import MasterData
+from app.master_workbook import preview_workbook
+from app.utils.excel_parser import (PendingTask, ScheduleDatabase,
+                                    parse_master_tasks, preview_master_tasks)
+
+from _entrylib import _entry
+
+
+def _base_md() -> MasterData:
+    md = MasterData()
+    md.build_from_entries([
+        _entry(1, "周四", "567", "一班", "1组", "A410", teacher="吴老师", experiment="扭摆法"),
+        _entry(2, "周四", "567", "一班", "2组", "A411", teacher="林老师", experiment="扭摆法"),
+        _entry(3, "周五", "678", "二班", "1组", "A410", teacher="吴老师", experiment="声速测量"),
+    ])
+    md.upsert_room("A410", capacity=30)
+    md.upsert_class("一班", groups=["1组", "2组"], weekday="周四",
+                    time_slots=["567"], week_min=1, week_max=16)
+    return md
+
+
+def _dump(md, path):
+    from app.master_workbook import build_workbook
+    build_workbook(md).save(path)
+    return str(path)
+
+
+# ---------------------------------------------------------------- 单元：台账预览
+
+def test_preview_workbook_maps_columns_and_samples(tmp_path):
+    """导出的台账再预览：字段←列名、样本行、行数都要对得上。"""
+    md = _base_md()
+    p = _dump(md, tmp_path / "wb.xlsx")
+
+    rep = preview_workbook(p)
+    assert rep["tagged"] is True
+    exp = rep["tables"]["experiments"]
+    assert exp["found"] is True and exp["rows"] == 2
+    # 列名映射：字段 ← 导出用的表头
+    assert exp["columns"]["name"] == "实验项目"
+    assert exp["columns"]["teachers"] == "授课教师"
+    assert exp["columns"]["classes"] == "适用班级"
+    assert exp["unrecognized"] == [], "自己导出的台账不该有认不出的列"
+    assert exp["stat_dropped"] == []
+    # 样本行与写库同一段代码：名字对得上（overview 的排序不假设）
+    assert {s["name"] for s in exp["samples"]} == {"扭摆法", "声速测量"}
+    niunai = next(s for s in exp["samples"] if s["name"] == "扭摆法")
+    assert niunai["teachers"] == ["吴老师", "林老师"]
+
+
+def test_preview_reports_unrecognized_and_stat_columns(tmp_path):
+    """外校格式：认不出的列、统计列都要在报告里说出口，不当实体名。"""
+    p = tmp_path / "foreign.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "实验项目"
+    ws.append(["编号", "项目名称", "班级数", "任课教师", "备注"])
+    ws.append(["E01", "迈克耳孙干涉", 5, "鄢老师", "演示用"])
+    ws.append(["E02", "密立根油滴", 3, "陈老师", ""])
+    wb.save(p)
+
+    rep = preview_workbook(str(p))
+    exp = rep["tables"]["experiments"]
+    assert exp["columns"]["name"] == "项目名称", "外校列名要走别名映射"
+    assert exp["columns"]["teachers"] == "任课教师"
+    assert "编号" in exp["unrecognized"] and "备注" in exp["unrecognized"], \
+        "认不出的列必须列出来，否则教秘不知道它们被丢了"
+    assert "班级数" not in exp["unrecognized"], \
+        "统计列是认出来后主动忽略的，不该又算进未识别列（同一列报两次）"
+    assert "班级数" in exp["stat_dropped"], "「班级数」是统计列，不能当班级清单"
+    assert any("统计列" in w for w in rep["warnings"]), rep["warnings"]
+    # 统计列的值不许以任何形式漏进样本行（5/3 不是班级名）
+    assert "classes" not in exp["samples"][0], "统计列被剔除了，样本里不该有班级字段"
+    leaked = [v for s in exp["samples"] for v in s.values() if str(v) in ("5", "3")]
+    assert not leaked, f"统计列的值漏进样本：{leaked}"
+
+
+def test_preview_missing_required_column_skips_table_with_reason(tmp_path):
+    """表头认不出名称列 → 整页跳过并说清缺什么（R-34：不静默半导入）。"""
+    p = tmp_path / "junk.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "实验项目"
+    ws.append(["编号", "备注"])
+    ws.append([1, "随便写点什么"])
+    wb.save(p)
+
+    rep = preview_workbook(str(p))
+    t = rep["tables"]["experiments"]
+    assert t["skipped"] is True and t["rows"] == 0
+    assert any("没认出" in w for w in rep["warnings"]), rep["warnings"]
+
+
+def test_preview_accepts_file_like_object(tmp_path):
+    """端点走 BytesIO 解析（预览不落盘）—— 这里锁 file-like 入参可用。"""
+    md = _base_md()
+    p = _dump(md, tmp_path / "wb.xlsx")
+    with open(p, "rb") as f:
+        rep = preview_workbook(io.BytesIO(f.read()))
+    assert rep["tables"]["experiments"]["rows"] == 2
+
+
+# ---------------------------------------------------------------- 单元：清单预览
+
+def test_tasks_preview_maps_alias_headers(tmp_path):
+    """清单列名千奇百怪（行政班级/项目名称/实验室）也要映射出来。"""
+    p = tmp_path / "master.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "实验项目清单"
+    ws.append(["课程名称", "行政班级", "项目名称", "组别", "指导教师", "实验室", "备注"])
+    ws.append(["大学物理实验", "25级新专业", "迈克耳孙干涉", "1组", "吴老师", "A410", "x"])
+    ws.append(["大学物理实验", "25级新专业", "声速测量", "2组", "陈老师", "A411", ""])
+    wb.save(p)
+
+    rep = preview_master_tasks(str(p))
+    assert rep["tasks"] == 2
+    assert rep["columns"]["class_name"] == "行政班级"
+    assert rep["columns"]["experiment"] == "项目名称"
+    assert rep["columns"]["room"] == "实验室"
+    assert "备注" in rep["unrecognized_columns"]
+    assert rep["samples"][0]["experiment"] == "迈克耳孙干涉"
+    assert rep["samples"][0]["teacher"] == "吴老师"
+    assert rep["blank_or_incomplete_rows"] == 0
+
+
+def test_tasks_preview_missing_required_columns_raises(tmp_path):
+    """认不出班级/实验项目 → 抛错说清缺什么（端点转 400）。"""
+    p = tmp_path / "bad.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["序号", "备注"])
+    ws.append([1, "甲"])
+    wb.save(p)
+
+    with pytest.raises(ValueError) as ei:
+        preview_master_tasks(str(p))
+    assert "班级" in str(ei.value) and "实验项目" in str(ei.value)
+
+
+def test_parse_master_tasks_report_is_structured(tmp_path):
+    """写库路径的报告同样带结构化 samples（向导 UI 与 /upload-master 共用）。"""
+    p = tmp_path / "m.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "实验项目清单"
+    ws.append(["课程", "班级", "实验项目", "学生组", "授课教师", "场地"])
+    ws.append(["大学物理实验", "25级新专业", "迈克耳孙干涉", "1组", "吴老师", "A410"])
+    wb.save(p)
+
+    _tasks, report = parse_master_tasks(str(p))
+    assert report["tasks"] == 1
+    assert report["samples"] == [{
+        "class_name": "25级新专业", "experiment": "迈克耳孙干涉", "group": "1组",
+        "teacher": "吴老师", "room": "A410", "course": "大学物理实验",
+        "week": None, "weekday": "",
+    }]
+    assert report["columns"]["class_name"] == "班级"
+
+
+# ---------------------------------------------------------------- HTTP：只读性 + 鉴权
+
+@pytest.fixture
+def api_env(tmp_path, monkeypatch):
+    """一套可跑 HTTP 的最小环境（与 test_master_workbook 同模式）。"""
+    from app.api import reschedule as api
+
+    db = ScheduleDatabase()
+    db.entries = [_entry(1, "周四", "567", "一班", "1组", "A410")]
+    db.loaded = True
+    db._filepath = str(tmp_path / "schedule.xlsx")
+    open(db._filepath, "wb").close()
+    monkeypatch.setattr(api, "_db", db)
+    monkeypatch.setattr(api, "_master_data", MasterData())
+    monkeypatch.setattr(api, "_master_tasks", [])
+    monkeypatch.setattr(api, "_schedule_fp", master_store.schedule_fingerprint(db._filepath))
+    monkeypatch.setattr(api, "_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(master_store, "STORE_PATH", str(tmp_path / "master_store.json"))
+    return api
+
+
+def _foreign_workbook_bytes() -> bytes:
+    """一份外校格式台账：新项目 + 统计列 + 认不出的列。"""
+    buf = io.BytesIO()
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "实验项目"
+    ws.append(["编号", "项目名称", "班级数", "任课教师", "备注"])
+    ws.append(["E01", "向导预览项目（可删）", 5, "向导预览教师（可删）", "演示用"])
+    ws2 = wb.create_sheet("场地")
+    ws2.append(["场地", "容量"])
+    ws2.append(["A999", 40])
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _admin_headers():
+    from app.security import issue_admin_token
+    return {"Authorization": f"Bearer {issue_admin_token('admin')['token']}"}
+
+
+def _post_file(client, path, content: bytes, token=None):
+    return client.post(path,
+                       files={"file": ("up.xlsx", content,
+                                       "application/vnd.openxmlformats-officedocument."
+                                       "spreadsheetml.sheet")},
+                       headers=token or {})
+
+
+def test_preview_endpoint_writes_nothing_but_import_does(api_env, tmp_path):
+    """核心反向验证：预览跑完主数据必须原样；同一份文件随后能真的导入。
+
+    若预览偷偷 apply 了，「marker 不在 overview 里」这条会红 —— 只断言
+    "接口 200"是假绿（预览成功≠无副作用，R-25 铁律）。
+    """
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    content = _foreign_workbook_bytes()
+
+    r = _post_file(client, "/api/reschedule/master/import-preview", content, _admin_headers())
+    assert r.status_code == 200, r.text[:300]
+    body = r.json()
+    assert body["kind"] == "workbook"
+    exp = body["data"]["tables"]["experiments"]
+    assert exp["rows"] == 1 and exp["columns"]["name"] == "项目名称"
+    assert "向导预览项目（可删）" in [s["name"] for s in exp["samples"]]
+
+    # 预览之后：主数据里不许出现任何来自这份文件的东西
+    ov = client.get("/api/reschedule/master/overview").json()["data"]
+    names = {e["name"] for e in ov["experiments"]}
+    assert "向导预览项目（可删）" not in names, "预览写入了主数据（只读承诺被破坏）"
+    assert "A999" not in {r_["name"] for r_ in ov["rooms"]}
+
+    # 同一份文件确认导入：必须真的进得去（证明上面的"没写入"不是文件本身导不进）
+    r2 = _post_file(client, "/api/reschedule/master/import", content, _admin_headers())
+    assert r2.status_code == 200, r2.text[:300]
+    ov2 = client.get("/api/reschedule/master/overview").json()["data"]
+    assert "向导预览项目（可删）" in {e["name"] for e in ov2["experiments"]}
+    assert "向导预览教师（可删）" in {t["name"] for t in ov2["teachers"]}
+    assert r2.json()["stats"]["experiments"]["added"] >= 1
+
+
+def test_preview_rows_equal_import_rows(api_env):
+    """预览报的行数之和 == 导入 stats 的行数之和（同一份解析代码）。"""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    content = _foreign_workbook_bytes()
+    prev = _post_file(client, "/api/reschedule/master/import-preview",
+                      content, _admin_headers()).json()["data"]
+    prev_rows = sum(t.get("rows", 0) for t in prev["tables"].values())
+
+    imp = _post_file(client, "/api/reschedule/master/import",
+                     content, _admin_headers()).json()
+    imp_rows = sum(s.get("rows", 0) for s in imp["stats"].values())
+    assert prev_rows == imp_rows == 2, f"预览 {prev_rows} 行 vs 导入 {imp_rows} 行"
+
+
+def test_tasks_preview_writes_nothing_but_upload_does(api_env):
+    """清单预览不碰 _master_tasks；确认上传后才进待排任务。"""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    buf = io.BytesIO()
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "实验项目清单"
+    ws.append(["课程", "班级", "实验项目", "学生组"])
+    ws.append(["大学物理实验", "25级新专业", "迈克耳孙干涉", "1组"])
+    ws.append(["大学物理实验", "25级新专业", "声速测量", "2组"])
+    wb.save(buf)
+    content = buf.getvalue()
+
+    client = TestClient(app)
+    r = _post_file(client, "/api/reschedule/master/tasks-preview", content, _admin_headers())
+    assert r.status_code == 200, r.text[:300]
+    body = r.json()
+    assert body["kind"] == "tasks"
+    assert body["data"]["tasks"] == 2
+    assert body["data"]["columns"]["class_name"] == "班级"
+
+    st = client.get("/api/reschedule/master-status").json()["data"]
+    assert st["master_tasks"] == 0, "预览写入了待排任务（只读承诺被破坏）"
+
+    r2 = _post_file(client, "/api/reschedule/upload-master", content, _admin_headers())
+    assert r2.status_code == 200, r2.text[:300]
+    st2 = client.get("/api/reschedule/master-status").json()["data"]
+    assert st2["master_tasks"] == 2
+    assert "25级新专业" in st2["master_classes"]
+
+
+def test_tasks_preview_leaves_db_pending_untouched(api_env):
+    """安排表里已有的待排行，预览清单不能动它。"""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    api_env._db.pending = [PendingTask("一班", "待排实验", "1组")]
+    buf = io.BytesIO()
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "实验项目清单"
+    ws.append(["课程", "班级", "实验项目", "学生组"])
+    ws.append(["大学物理实验", "25级新专业", "迈克耳孙干涉", "1组"])
+    wb.save(buf)
+
+    client = TestClient(app)
+    r = _post_file(client, "/api/reschedule/master/tasks-preview",
+                   buf.getvalue(), _admin_headers())
+    assert r.status_code == 200
+    st = client.get("/api/reschedule/master-status").json()["data"]
+    assert st["pending_in_schedule"] == 1
+    assert [t.experiment for t in api_env._db.pending] == ["待排实验"]
+
+
+def test_tasks_preview_missing_required_columns_400(api_env):
+    """缺「班级/实验项目」列 → 400，且消息说清缺什么（与 upload-master 同一句）。"""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    buf = io.BytesIO()
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["序号", "备注"])
+    ws.append([1, "甲"])
+    wb.save(buf)
+
+    r = _post_file(TestClient(app), "/api/reschedule/master/tasks-preview",
+                   buf.getvalue(), _admin_headers())
+    assert r.status_code == 400
+    assert "班级" in r.json()["detail"] and "实验项目" in r.json()["detail"]
+
+
+def test_preview_endpoints_require_admin(api_env):
+    """免鉴权白名单里没有预览端点（与 /master/import 同一边界）。"""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    content = _foreign_workbook_bytes()
+    for path in ("/api/reschedule/master/import-preview",
+                 "/api/reschedule/master/tasks-preview"):
+        r = _post_file(TestClient(app), path, content)
+        assert r.status_code in (401, 403), f"{path} 匿名可达：{r.text[:200]}"
+
+
+def test_preview_endpoints_reject_non_excel(api_env):
+    """非 Excel 内容 → 400（openpyxl 解析失败即拒，与导入端点一致）。"""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    for path in ("/api/reschedule/master/import-preview",
+                 "/api/reschedule/master/tasks-preview"):
+        r = _post_file(TestClient(app), path, b"not an excel", _admin_headers())
+        assert r.status_code == 400, path
+
+
+# ---------------------------------------------------------------------------
+# R42：导入"只增补不删除"时，新增的实体必须点名
+#
+# 语义本身是对的：`/master/import` 只做新增与补充，不做删除
+# （"Excel 里的空可能是没填，也可能就是没变"）。
+#
+# 实测（把教师页「教师C」改成「教师C改」再导入）：
+#     13 人 → 14 人，「教师C」还在，「教师C改」也在
+#     message = "✅ 已导入 66 行（新建实体 1 个）"
+#
+# **"改名 = 新增"是这套语义的必然结果，不是缺陷。**
+# 缺陷在说明：教秘改了一行，期待"改好了"，实际"多了一个人"，
+# 而系统只说"新建 1 个"—— 不说是什么。他没有任何东西能把
+# "新建的 1 个"和自己改的那行对上。
+#
+# 下面用**自建台账**测（不依赖真实表），因为要精确控制"改名"这一行。
+# ---------------------------------------------------------------------------
+
+
+def _teacher_sheet_workbook(names):
+    """造一份只含「教师」页的最小台账。"""
+    import openpyxl
+    from app.master_workbook import MASTER_WORKBOOK_TAG  # noqa: F401
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "教师"
+    ws.append(["教师", "可授项目"])
+    for n in names:
+        ws.append([n, ""])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_import_names_newly_created_entities(api_env):
+    """新增实体必须在 message 里点名。"""
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    first = _teacher_sheet_workbook(["张三"])
+    r = _post_file(client, "/api/reschedule/master/import", first, _admin_headers())
+    assert r.status_code == 200, r.text[:300]
+    assert r.json()["stats"]["teachers"]["added"] >= 1
+
+    # 换一个名字再导入 → 是"新增"，不是"改名"
+    second = _teacher_sheet_workbook(["张三改"])
+    r2 = _post_file(client, "/api/reschedule/master/import", second, _admin_headers())
+    d = r2.json()
+    assert d["stats"]["teachers"]["added"] == 1, "前提：改名会新增 1 个实体"
+
+    msg = d.get("message") or ""
+    assert "张三改" in msg, (
+        "导入结果只说了「新建实体 1 个」，没点名 —— "
+        f"教秘无法判断新建的是不是自己改的那行。实际 message：{msg!r}"
+    )
+    assert "改名" in msg or "名称" in msg, (
+        "没有解释「为什么改名会变成新增」 —— 教秘会以为自己改成功了"
+    )
+
+
+def test_import_report_carries_added_names(api_env):
+    """结构化字段里也要有名字（前端不必从 message 正则反解）。"""
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    _post_file(client, "/api/reschedule/master/import",
+               _teacher_sheet_workbook(["李四"]), _admin_headers())
+    r = _post_file(client, "/api/reschedule/master/import",
+                   _teacher_sheet_workbook(["李四改"]), _admin_headers())
+    d = r.json()
+    added = (d.get("report") or {}).get("added_names") or {}
+    flat = [n for v in added.values() for n in (v or [])]
+    assert "李四改" in flat, f"report.added_names 里没有新增实体名字，实际：{added}"
+
+
+def test_no_new_entities_keeps_message_plain(api_env):
+    """没有新增时不该硬塞一段"新增了：无"。"""
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    same = _teacher_sheet_workbook(["王五"])
+    _post_file(client, "/api/reschedule/master/import", same, _admin_headers())
+    r = _post_file(client, "/api/reschedule/master/import", same, _admin_headers())
+    d = r.json()
+    assert d["stats"]["teachers"]["added"] == 0
+    assert "本次新建" not in (d.get("message") or ""), "没有新增却加了「本次新建」段落"
+
+
+# ---------------------------------------------------------------------------
+# R49：清单导入的**时序竞态** —— 预览 → 提交之间，被替换掉的是哪一份
+#
+# 前面 17 条把「预览不改数据」守得很密（242/278/296/330），但那批锁的都是
+# 「同一份数据前后两次读」。真正没人认领的是两阶段之间的**语义**：
+#
+#   `/upload-master` 是**整批替换**（先 clear 再 extend，不累加）。
+#   教秘手里已有一份 2 条清单时再传一份 3 条的，得到的是 3 条、不是 5 条 ——
+#   这个行为是对的（见 `clear_master_tasks` 的说明），**错的是说明**：
+#
+#     预览： 「将读入 3 条」        ← 听起来像"加 3 条"
+#     提交： 「已读入 3 条主数据任务」← 不提旧的 2 条去哪了
+#
+# 教秘无从知道自己刚换掉了什么；若这期间别人也传过一份清单，
+# 他连"换掉的那份还是不是自己预览时看到的那份"都不知道。
+#
+# 与 M47（台账导入的 `reports_drift`）不是同一条：M47 守的是**台账**
+# `/master/import`（只增补），这里守的是**清单** `/upload-master`（整批替换）。
+# ---------------------------------------------------------------------------
+
+
+def _task_list_bytes(rows):
+    """造一份清单（课程/班级/实验项目/学生组）；rows 为 (班级, 项目, 组)。"""
+    buf = io.BytesIO()
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "实验项目清单"
+    ws.append(["课程", "班级", "实验项目", "学生组"])
+    for cls, exp, grp in rows:
+        ws.append(["大学物理实验", cls, exp, grp])
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _two_tasks():
+    return _task_list_bytes([("25级新专业", "迈克耳孙干涉", "1组"),
+                             ("25级新专业", "声速测量", "2组")])
+
+
+def _five_tasks():
+    return _task_list_bytes([("26级新专业", f"实验项目{i}", f"{i}组") for i in range(1, 6)])
+
+
+def test_tasks_preview_says_what_the_upload_will_replace(api_env):
+    """预览必须说出「现有几条会被换掉」—— 提交是整批替换，不是累加。
+
+    ⚠️ 空转检查（M54）：把 `existing_tasks` 抹成 0，本例必须红。
+    只断言 `tasks == 3` 是假绿 —— 那是已有用例 `test_tasks_preview_...`
+    早就验过的"预览行数"，本例验的是"预览有没有说清代价"。
+    """
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    r = _post_file(client, "/api/reschedule/upload-master", _two_tasks(), _admin_headers())
+    assert r.status_code == 200, r.text[:300]
+    assert client.get("/api/reschedule/master-status").json()["data"]["master_tasks"] == 2
+
+    three = _task_list_bytes([("25级新专业", "迈克耳孙干涉", "1组"),
+                              ("25级新专业", "声速测量", "2组"),
+                              ("25级新专业", "牛顿环", "3组")])
+    pv = _post_file(client, "/api/reschedule/master/tasks-preview", three, _admin_headers())
+    assert pv.status_code == 200, pv.text[:300]
+    d = pv.json()["data"]
+    assert d["tasks"] == 3, "前提：新清单 3 条"
+    assert d.get("existing_tasks") == 2, (
+        "预览只说「将读入 3 条」，没说现有 2 条会被**整体换掉** —— "
+        f"教秘会以为提交后是 5 条。实际 data 键：{sorted(d)}"
+    )
+
+
+def test_upload_master_says_how_many_it_replaced(api_env):
+    """提交回执必须说出换掉了几条，且真的没把新旧累加在一起。"""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    _post_file(client, "/api/reschedule/upload-master", _two_tasks(), _admin_headers())
+
+    one = _task_list_bytes([("26级新专业", "迈克耳孙干涉", "1组")])
+    r = _post_file(client, "/api/reschedule/upload-master", one, _admin_headers())
+    assert r.status_code == 200, r.text[:300]
+    d = r.json()
+
+    assert d["total_tasks"] == 1
+    assert client.get("/api/reschedule/master-status").json()["data"]["master_tasks"] == 1, \
+        "整批替换被写成了累加（1 + 2 = 3 条）"
+    assert d.get("replaced_tasks") == 2, f"结构化字段没报替换条数：{d.get('replaced_tasks')!r}"
+    msg = d.get("message") or ""
+    assert "原有 2 条" in msg, (
+        "回执只说「已读入 1 条」，没说旧的 2 条被换掉了 —— "
+        f"教秘不知道它们去哪了。实际 message：{msg!r}"
+    )
+
+
+def test_upload_reports_replaced_count_at_commit_time(api_env):
+    """预览之后清单被别人换过 → 回执报的必须是**提交时**的数量，不是预览时的。
+
+    场景（这正是「预览 → 提交」之间那段窗口）：
+        预览 B：现有 2 条（existing_tasks=2）
+        中间  ：另一位教秘传了 5 条的清单
+        提交 B：实际换掉的是 5 条
+
+    回执若照着预览报 2 条，教秘拿着"换掉 2 条"的印象去核对，
+    会对不上 —— 数字都是真的，描述的却不是同一件事（R54/M47 同族）。
+    """
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    _post_file(client, "/api/reschedule/upload-master", _two_tasks(), _admin_headers())
+
+    one = _task_list_bytes([("26级新专业", "迈克耳孙干涉", "1组")])
+    pv = _post_file(client, "/api/reschedule/master/tasks-preview", one, _admin_headers()).json()
+    assert pv["data"]["existing_tasks"] == 2, "前提：预览时看到的是 2 条"
+
+    # 中间：别处先传了一份 5 条的清单
+    mid = _post_file(client, "/api/reschedule/upload-master", _five_tasks(), _admin_headers())
+    assert mid.json()["total_tasks"] == 5
+
+    r = _post_file(client, "/api/reschedule/upload-master", one, _admin_headers()).json()
+    msg = r.get("message") or ""
+    assert "原有 5 条" in msg, (
+        "回执报的是预览时的 2 条 —— 提交时实际换掉的是 5 条，"
+        f"说明里的数必须与实际结果一致。实际 message：{msg!r}"
+    )
+    assert "原有 2 条" not in msg, "同一个回执里出现了两个不同的'原有'数量"

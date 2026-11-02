@@ -1,0 +1,311 @@
+import { Fragment } from 'react';
+import type { RefObject } from 'react';
+import type { ParallelCourse, ParallelSolveResult, SchoolPlanResult } from '../types';
+import { GRID_TIME_SLOTS, timeSlotLabels } from '../constants/labels';
+import LandPlanPanel from '../components/LandPlanPanel';
+
+// 周六/周日也是真实上课日（真实表 71/433 条在周末，"金工 5、6 周排周六"是常态）。
+// 原先只给周中五个按钮，周末班连"选对日子"的入口都没有。
+const WEEKDAY_OPTIONS = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+interface Props {
+  weekday: string;
+  courses: ParallelCourse[];
+  selected: string;
+  loading: boolean;
+  solving: boolean;
+  result: ParallelSolveResult | null;
+  viewWeek: number | null;
+  resultRef: RefObject<HTMLDivElement>;
+  /** 全校一键结果（逐班·按天，组级） */
+  schoolPlan?: SchoolPlanResult | null;
+  schoolSolving?: boolean;
+  /** 落地：是否已登录管理员（采纳/撤销需要）+ 引导登录 */
+  adminAuthed?: boolean;
+  onRequireLogin?: () => void;
+  onMsg?: (m: string) => void;
+  onWeekdayChange: (w: string) => void;
+  onSolve: (className: string) => void;
+  onExport: () => void;
+  onViewWeekChange: (w: number) => void;
+  onSolveSchool?: () => void;
+  onExportSchool?: () => void;
+}
+
+/** ⚡ 并行排课：一门课的全部实验项目 × 学生组别一次列出，CP-SAT 一键统一分配。 */
+export default function ParallelView({
+  weekday, courses, selected, loading, solving, result, viewWeek, resultRef,
+  schoolPlan, schoolSolving, adminAuthed, onRequireLogin, onMsg,
+  onWeekdayChange, onSolve, onExport, onViewWeekChange,
+  onSolveSchool, onExportSchool,
+}: Props) {
+  // 周沙盘：只渲染被选中的那一周，行=时段 列=学生组
+  const weeks = Object.keys(result?.by_week || {}).map(Number).sort((a, b) => a - b);
+  const activeWeek = viewWeek ?? weeks[0];
+  const weekSessions = (result?.schedule || []).filter((s) => s.week === activeWeek);
+  const groups: string[] = Array.from(new Set<string>(weekSessions.map((s) => String(s.group))));
+
+  return (
+    <main className="max-w-4xl mx-auto px-4 pb-10">
+      <div className="bg-white rounded-xl border border-gray-200 p-5 mb-6">
+        <div className="flex items-start justify-between gap-3">
+          <h2 className="text-lg font-semibold text-gray-900 mb-1">⚡ 并行排课</h2>
+          {onSolveSchool && (
+            <button
+              onClick={onSolveSchool}
+              disabled={schoolSolving}
+              className="shrink-0 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 text-sm font-medium"
+              title="按主数据的「课程总时间范围」逐班排定（跨星期、组级），班与班之间互斥教室/教师"
+            >
+              {schoolSolving ? '⏳ 全校排课中（约 15 秒）...' : '🌐 一键排全校'}
+            </button>
+          )}
+        </div>
+        <p className="text-sm text-gray-500 mb-3">
+          一门课的全部实验项目 × 学生组别一次列出，CP-SAT 约束求解一键统一分配周次/时段/场地（每组每周一个实验，场地/教师互斥）
+        </p>
+
+        {/* 上课星期选择（默认自动沿用历史最常用星期） */}
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
+          <span className="text-xs text-gray-500">上课星期：</span>
+          {WEEKDAY_OPTIONS.map((w) => (
+            <button
+              key={w || 'auto'}
+              onClick={() => onWeekdayChange(w)}
+              className={`px-2.5 py-1 rounded-lg text-xs transition-colors ${
+                weekday === w
+                  ? 'bg-cyan-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {w || '自动'}
+            </button>
+          ))}
+        </div>
+
+        {loading && <div className="text-sm text-gray-400 py-4">加载课程总览中...</div>}
+
+        {/* 课程总览卡片 */}
+        <div className="grid gap-3 md:grid-cols-2">
+          {courses.map((c) => (
+            <div key={c.class_name}
+              className={`border rounded-xl p-4 transition-colors ${
+                selected === c.class_name ? 'border-cyan-400 bg-cyan-50' : 'border-gray-200 hover:border-cyan-300'
+              }`}>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="font-medium text-gray-900 text-sm">{c.class_name}</div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    常上{c.weekday} · {c.projects.length} 个实验项目 · {c.total_units} 个教学单元
+                  </div>
+                  {!!c.weekend_sessions && (
+                    <div className="text-xs text-amber-600 mt-0.5">
+                      历史课次含周末 {c.weekend_sessions} 节（
+                      {Object.entries(c.weekday_mix || {}).map(([d, n]) => `${d} ${n}`).join(' / ')}）
+                    </div>
+                  )}
+                  {/* 待排单元：大纲里新增、此前从没排过时间的实验项目。
+                      没有这个提示，教秘会以为系统只会"把去年的课重排一遍"。 */}
+                  {!!c.pending_units && (
+                    <div className="text-xs text-cyan-700 mt-0.5">
+                      含 {c.pending_units} 个待排单元（大纲新增，此前没排过时间）
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={() => onSolve(c.class_name)}
+                  disabled={solving}
+                  className="px-3 py-1.5 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 disabled:opacity-50 text-xs font-medium whitespace-nowrap"
+                >
+                  {solving && selected === c.class_name ? '⏳ 求解中...' : '一键排课'}
+                </button>
+              </div>
+              <div className="mt-2 space-y-1">
+                {c.projects.slice(0, 4).map((p) => (
+                  <div key={p.project} className="text-xs text-gray-600">
+                    · {p.project} <span className="text-gray-400">（{p.groups.length} 组）</span>
+                  </div>
+                ))}
+                {c.projects.length > 4 && (
+                  <div className="text-xs text-gray-400">…共 {c.projects.length} 个项目</div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 全校一键结果：逐班状态（失败必须说清原因，不能只显示"完成"） */}
+      {schoolPlan && (
+        <div className="bg-white rounded-xl border border-indigo-200 p-5 mb-6">
+          <h3 className="font-medium text-gray-900 mb-1">
+            🌐 全校一键排课 · {schoolPlan.classes_complete ?? schoolPlan.classes_ok}/
+            {schoolPlan.classes_total} 个班排满
+          </h3>
+          <p className="text-xs text-gray-500 mb-3">
+            共 {schoolPlan.scheduled} 条安排（组级）｜ 单元 {schoolPlan.units} 个 ｜ 用时 {schoolPlan.elapsed_s} 秒
+            {(schoolPlan.units_missing ?? 0) > 0 && (
+              <span className="text-amber-600"> ｜ 缺 {schoolPlan.units_missing} 个组课时</span>
+            )}
+            {schoolPlan.classes_failed.length > 0 && (
+              <span className="text-amber-600"> ｜ {schoolPlan.classes_failed.length} 个班未排定（原因见下表）</span>
+            )}
+            {onExportSchool && schoolPlan.schedule.length > 0 && (
+              <button
+                onClick={onExportSchool}
+                className="ml-3 px-3 py-1 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-xs font-medium"
+              >
+                ⬇️ 导出全校方案 Excel
+              </button>
+            )}
+          </p>
+          <div className="max-h-72 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="text-gray-400">
+                <tr>
+                  <th className="text-left py-1">班级</th>
+                  <th className="text-left">上课日</th>
+                  <th className="text-right">单元</th>
+                  <th className="text-right">已排</th>
+                  <th className="text-left pl-3">状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                {schoolPlan.per_class.map((c) => (
+                  <tr key={c.class_name} className="border-t border-gray-100">
+                    <td className="py-1 text-gray-800">{c.class_name}</td>
+                    <td className="text-gray-500">{(c.weekdays || []).join('/') || '—'}</td>
+                    <td className="text-right text-gray-600">{c.total_units}</td>
+                    <td className="text-right text-gray-800">{c.scheduled}</td>
+                    <td className={`pl-3 ${c.success ? 'text-emerald-600' : 'text-red-600'}`}>
+                      {c.success ? c.status : (c.error || '失败')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 落地为正式安排表：方案与安排表同构（班级×项目×组），先看差异再写入。
+              首屏「一键自动排课」的初稿是教师×课程口径、没有学生组，落进安排表
+              会凭空编造组别，所以那个入口不给落地（后端同一口径）。
+              weekday 在这里显式补齐：ParallelSession 的防御性可选 → LandPlanRow 必填；
+              真缺了由后端 normalize_plan 报错列出（不猜、不静默丢行）。 */}
+          {schoolPlan.schedule.length > 0 && onMsg && onRequireLogin && (
+            <LandPlanPanel
+              schedule={schoolPlan.schedule.map((r) => ({ ...r, weekday: r.weekday ?? '' }))}
+              adminAuthed={!!adminAuthed}
+              onRequireLogin={onRequireLogin}
+              onMsg={onMsg}
+            />
+          )}
+        </div>
+      )}
+
+      {/* 求解结果 */}
+      {result && (
+        <div ref={resultRef} className="bg-white rounded-xl border border-cyan-200 p-5">
+          <h3 className="font-medium text-gray-900 mb-1">
+            📋 排课方案（{result.weekday}）· 状态 {result.status}
+          </h3>
+          <p className="text-xs text-gray-500 mb-4">
+            {result.scheduled}/{result.total_units} 个单元已排定，用 {result.weeks_used} 周
+            ｜ 按周分布：{Object.entries(result.by_week || {}).map(([w, n]) => `第${w}周${n}个`).join('、')}
+            <button
+              onClick={onExport}
+              className="ml-3 px-3 py-1 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-xs font-medium"
+            >
+              ⬇️ 导出 Excel
+            </button>
+          </p>
+
+          {/* 灰箱补全说明：信息不全时系统替教秘做的每个默认决定，必须可见、可纠正 */}
+          {!!result.assumptions?.length && (
+            <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2">
+              <div className="text-xs font-medium text-amber-700 mb-1">
+                🧩 灰箱补全（以下 {result.assumptions.length} 项信息不全，系统按主数据/默认值代填，可在「主数据」里改）：
+              </div>
+              <ul className="text-xs text-amber-700 list-disc list-inside space-y-0.5">
+                {result.assumptions.map((a, i) => <li key={i}>{a}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {/* 周沙盘：按周切换，行=时段 列=学生组 */}
+          {activeWeek ? (
+            <div className="mb-5">
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
+                <span className="text-xs font-medium text-gray-500">周沙盘（{result.weekday}）：</span>
+                {weeks.map((w) => (
+                  <button
+                    key={w}
+                    onClick={() => onViewWeekChange(w)}
+                    className={`px-2.5 py-1 rounded-lg text-xs transition-colors ${
+                      activeWeek === w ? 'bg-cyan-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    第{w}周
+                  </button>
+                ))}
+              </div>
+              <div className="grid gap-1.5" style={{ gridTemplateColumns: `90px repeat(${groups.length}, 1fr)` }}>
+                <div />
+                {groups.map((g) => (
+                  <div key={g} className="text-center text-xs font-medium text-gray-500 truncate">{g}</div>
+                ))}
+                {GRID_TIME_SLOTS.map((ts) => (
+                  <Fragment key={ts}>
+                    <div className="text-xs text-gray-500 flex items-center justify-center">
+                      {timeSlotLabels[ts] || ts}
+                    </div>
+                    {groups.map((g) => {
+                      const s = weekSessions.find((x) => x.group === g && x.time_slot === ts);
+                      return s ? (
+                        <div key={`${ts}-${g}`} className="bg-cyan-50 border border-cyan-200 rounded-lg p-1.5 min-h-[52px]">
+                          <div className="text-xs text-cyan-800 font-medium leading-tight line-clamp-2">{s.project}</div>
+                          <div className="text-[10px] text-cyan-600">{s.room} · {s.teacher}</div>
+                        </div>
+                      ) : (
+                        <div key={`${ts}-${g}`} className="bg-gray-50 border border-gray-100 rounded-lg min-h-[52px]" />
+                      );
+                    })}
+                  </Fragment>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
+                  <th className="py-2 pr-3">周次</th>
+                  <th className="py-2 pr-3">时段</th>
+                  <th className="py-2 pr-3">场地</th>
+                  <th className="py-2 pr-3">学生组</th>
+                  <th className="py-2 pr-3">实验项目</th>
+                  <th className="py-2">教师</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(result.schedule || []).slice(0, 40).map((s, i) => (
+                  <tr key={i} className="border-b border-gray-50">
+                    <td className="py-1.5 pr-3 text-cyan-700 font-medium">第{s.week}周</td>
+                    <td className="py-1.5 pr-3">{timeSlotLabels[s.time_slot] || s.time_slot}</td>
+                    <td className="py-1.5 pr-3">{s.room}</td>
+                    <td className="py-1.5 pr-3">{s.group}</td>
+                    <td className="py-1.5 pr-3">{s.project}</td>
+                    <td className="py-1.5 text-gray-500">{s.teacher}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {(result.schedule || []).length > 40 && (
+            <p className="text-xs text-gray-400 mt-2">仅显示前 40 条，共 {result.schedule!.length} 条</p>
+          )}
+        </div>
+      )}
+    </main>
+  );
+}
