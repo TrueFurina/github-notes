@@ -20,6 +20,8 @@
 - 五种有效 oracle：往返一致性（行式格式最好用）、差分预言机、不变式单调性、字段边界、端到端 CLI。
 - ★ **验签类接口必问一句**：函数有没有校验「被签的字节」和「调用方声称的载荷」是同一个东西？marl-ecdsa 的 `verify_action_package` 就只验自带的 `message_hex`、不看 `agent_id/action/timestamp/nonce`，导致复用一条**公开历史签名**即可伪造任意交易（`597cabe`）。这类「签名重放/授权混淆」不需要伪造签名，比想象中容易得多。
 - ★ **兄弟实现必查同步**：同一接口有两个实现时（`factory` 的 `if mode ==`、`standard_*` vs 主实现），上一次安全修复通常只改了一个。marl-ecdsa 的等权基线就漏了 CW-PBFT 在 09-28 加过的女巫门控 → 伪造 `voter_id` 即可凑够 Quorum（`4760fa9`）。**对照组最容易被忽略，而它恰恰是论文结论的基石。**
+- ★ **`get(k, 0)` 的 0 是最危险的哨兵值**：时间戳/计数器用 0 当「从未设置」，一旦参与 `now - x > timeout` 就变成「永远超时」。marl-ecdsa 的 failover 心跳就这么写的 → 每轮虚假视图切换，20 轮只注入 3 次拜占庭却报告 20 次 failover（`7caa0d8`）。问法：「缺省」的语义是「未知」还是「零」？是「未知」就不能参与数值比较。
+- ★ **先跑作者留的 `__main__` 自测**：日志第一行自相矛盾往往就是 bug（marl-ecdsa failover 的「Normal consensus」轮立刻打出 `View change: primary_timeout`）。比读代码快得多。
 - ★ **假阳性规律**：每次「发现 bug」先问「是不是我 oracle 写错了」（mahjong 三次、croniter 四次都如此）。
 - **判重三条件**：同文件 + 同函数 + 同语义；且必须 diff 补丁，看标题/issue 号会误判。
 - **「不硬凑」原则**：红海里撞车或需设计决策的 bug 一律放弃，宁可不发第 N 个 PR。已验证的落地流水线见 `github-notes/上游贡献落地流水线-2026-11-01.md`。
