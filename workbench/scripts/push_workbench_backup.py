@@ -154,9 +154,12 @@ root_tree=api(f'{API}/repos/{REPO}/git/trees','POST',{'tree':new_tree_entries})
 print('新 tree: %s (workbench 子树 %s)' % (root_tree['sha'][:10], wb_subtree['sha'][:10]))
 
 # ---------- 5. commit + force:false 推送 ----------
-msg='backup: workbench 产物归档（%d 文档 + %d 工具 + notes）' % (
-    sum(1 for a,_ in files if a.endswith('.md')),
-    sum(1 for a,_ in files if a.endswith('.py')))
+msg='backup: workbench 归档（docs %d + tools %d + notes %d + scripts %d = %d）' % (
+    sum(1 for a in wb_files if a.startswith('docs/')),
+    sum(1 for a in wb_files if a.startswith('tools/')),
+    sum(1 for a in wb_files if a.startswith('notes/')),
+    sum(1 for a in wb_files if a.startswith('scripts/')),
+    len(wb_files))
 r=api(f'{API}/repos/{REPO}/git/commits','POST',{'message':msg,'tree':root_tree['sha'],'parents':[head]})
 newc=r['sha']
 print('新 commit %s: %s' % (newc[:10], msg))
