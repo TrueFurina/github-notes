@@ -87,6 +87,13 @@ for r,d,fs in os.walk(os.path.join(ROOT,'work-repo')):
         arc='work-repo/'+os.path.relpath(fp, os.path.join(ROOT,'work-repo')).replace('\\','/')
         files.append((arc, fp))
 
+# 1g. 挂机工作流原创脚本 → workbench/workflows/
+WF=['round_start.py','weekly-report.ps1','upstream-scout.ps1','auto-fixer.ps1',
+    'pr-watchdog.ps1','auto-rebaser.ps1']
+for s in WF:
+    sp=os.path.join(ROOT,s)
+    if os.path.isfile(sp): files.append(('workflows/'+s, sp))
+
 # 去重（arc 唯一）
 seen=set(); unique=[]
 for arc,p in files:
@@ -174,13 +181,14 @@ root_tree=api(f'{API}/repos/{REPO}/git/trees','POST',{'tree':new_tree_entries})
 print('新 tree: %s (workbench 子树 %s)' % (root_tree['sha'][:10], wb_subtree['sha'][:10]))
 
 # ---------- 5. commit + force:false 推送 ----------
-msg='backup: workbench 归档（docs %d + tools %d + notes %d + scripts %d + probes %d + work-repo %d = %d）' % (
+msg='backup: workbench 归档（docs %d + tools %d + notes %d + scripts %d + probes %d + work-repo %d + workflows %d = %d）' % (
     sum(1 for a in wb_files if a.startswith('docs/')),
     sum(1 for a in wb_files if a.startswith('tools/')),
     sum(1 for a in wb_files if a.startswith('notes/')),
     sum(1 for a in wb_files if a.startswith('scripts/')),
     sum(1 for a in wb_files if a.startswith('probes/')),
     sum(1 for a in wb_files if a.startswith('work-repo/')),
+    sum(1 for a in wb_files if a.startswith('workflows/')),
     len(wb_files))
 r=api(f'{API}/repos/{REPO}/git/commits','POST',{'message':msg,'tree':root_tree['sha'],'parents':[head]})
 newc=r['sha']
