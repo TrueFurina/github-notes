@@ -67,6 +67,15 @@ for s in ['push-notes.py','push_workbench_backup.py']:
     if os.path.isfile(sp) and ('notes/'+s) not in [a for a,_ in files]:
         files.append(('scripts/'+s, sp))
 
+# 1e. probes/ 探针脚本（原创，未备份）
+for r,d,fs in os.walk(os.path.join(ROOT,'probes')):
+    d[:]=[x for x in d if x not in ('__pycache__','.pytest_cache')]
+    for f in fs:
+        if f.endswith('.py'):
+            fp=os.path.join(r,f)
+            arc='probes/'+os.path.relpath(fp, os.path.join(ROOT,'probes')).replace('\\','/')
+            files.append((arc, fp))
+
 # 去重（arc 唯一）
 seen=set(); unique=[]
 for arc,p in files:
@@ -154,11 +163,12 @@ root_tree=api(f'{API}/repos/{REPO}/git/trees','POST',{'tree':new_tree_entries})
 print('新 tree: %s (workbench 子树 %s)' % (root_tree['sha'][:10], wb_subtree['sha'][:10]))
 
 # ---------- 5. commit + force:false 推送 ----------
-msg='backup: workbench 归档（docs %d + tools %d + notes %d + scripts %d = %d）' % (
+msg='backup: workbench 归档（docs %d + tools %d + notes %d + scripts %d + probes %d = %d）' % (
     sum(1 for a in wb_files if a.startswith('docs/')),
     sum(1 for a in wb_files if a.startswith('tools/')),
     sum(1 for a in wb_files if a.startswith('notes/')),
     sum(1 for a in wb_files if a.startswith('scripts/')),
+    sum(1 for a in wb_files if a.startswith('probes/')),
     len(wb_files))
 r=api(f'{API}/repos/{REPO}/git/commits','POST',{'message':msg,'tree':root_tree['sha'],'parents':[head]})
 newc=r['sha']
