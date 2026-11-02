@@ -51,10 +51,15 @@ FRESH_SKIP={'GitHub-探索与贡献地图-2026-10-31.md','GitHub优质项目洞�
     'README-审计总索引.md','ROUND_LOG.md','ROUND_PROTOCOL.md','上游贡献手册.md',
     '工作区地图.md','核验台账.md','隐形失效形态归纳.md','github-workbench-2026-11-01.zip'}
 fresh=os.path.join(ROOT,'audit-notes-fresh')
-for f in sorted(os.listdir(fresh)):
-    p=os.path.join(fresh,f)
-    if os.path.isfile(p) and f not in FRESH_SKIP:
-        files.append(('notes/'+f, p))
+if os.path.isdir(fresh):
+    for f in sorted(os.listdir(fresh)):
+        p=os.path.join(fresh,f)
+        if os.path.isfile(p) and f not in FRESH_SKIP:
+            files.append(('notes/'+f, p))
+else:
+    # audit-notes-fresh 是临时工作目录，可能已被运行时回收；
+    # 其内容此前已并入远端 workbench/notes/，缺失不阻断本次备份。
+    print('  · audit-notes-fresh/ 不存在（已回收），跳过 notes/ 增量')
 
 # 1d. 关键工具脚本（恢复工作流要用）→ workbench/scripts/
 SCRIPTS=['push_workbench_backup.py','gh_push.py']
@@ -63,9 +68,10 @@ for s in SCRIPTS:
     if os.path.isfile(sp): files.append(('scripts/'+s, sp))
 # audit-notes-fresh 里的推送脚本也备一份
 for s in ['push-notes.py','push_workbench_backup.py']:
-    sp=os.path.join(fresh,s)
-    if os.path.isfile(sp) and ('notes/'+s) not in [a for a,_ in files]:
-        files.append(('scripts/'+s, sp))
+    if os.path.isdir(fresh):
+        sp=os.path.join(fresh,s)
+        if os.path.isfile(sp) and ('notes/'+s) not in [a for a,_ in files]:
+            files.append(('scripts/'+s, sp))
 
 # 1e. probes/ 探针脚本（原创，未备份）
 for r,d,fs in os.walk(os.path.join(ROOT,'probes')):

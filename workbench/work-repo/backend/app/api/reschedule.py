@@ -13,7 +13,6 @@ from collections import Counter, OrderedDict
 from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
@@ -566,344 +565,6 @@ async def master_status():
             "load_report": _db.load_report,
         },
     }
-
-
-# ---------------------------------------------------------------------------
-# 主数据（课程/实验项目/教师/场地/班级）CRUD —— 导师一号行动项「重构数据库」
-#
-# 只读总览免鉴权（它只是把安排表反推成实体，不含学生 PII）；写操作挂 require_admin。
-# 每个写接口都先 `_ensure_master_data()`：主数据从安排表反推，教秘的增删改在其上
-# 叠加 —— 若在空主数据上直接增删，会把反推基线整个丢掉。
-# ---------------------------------------------------------------------------
-
-class _CourseIn(BaseModel):
-    name: str
-
-
-class _ExperimentIn(BaseModel):
-    name: str
-    course: Optional[str] = ""
-    teachers: Optional[List[str]] = None
-    rooms: Optional[List[str]] = None
-    classes: Optional[List[str]] = None
-
-
-class _TeacherIn(BaseModel):
-    name: str
-    projects: Optional[List[str]] = None
-
-
-class _RoomIn(BaseModel):
-    name: str
-    capacity: Optional[int] = None
-
-
-class _ClassIn(BaseModel):
-    name: str
-    groups: Optional[List[str]] = None
-    weekday: Optional[str] = None
-    weekdays: Optional[List[str]] = None
-    time_slots: Optional[List[str]] = None
-    week_min: Optional[int] = None
-    week_max: Optional[int] = None
-
-
-@router.get("/master/overview", summary="主数据五张实体表总览")
-async def master_overview():
-    """五张实体表（课程/实验项目/教师/场地/班级）的完整状态。免鉴权：纯实体清单。"""
-    await _ensure_loaded_async()
-    _ensure_master_data()
-    return {"success": True, "data": _master_data.overview()}
-
-
-@router.post("/master/init", summary="从安排表反推主数据（一键初始化）", dependencies=_ADMIN_ONLY)
-@_master_write
-async def master_init():
-    """幂等：清空主数据后从当前安排表重新反推。"""
-    await _ensure_loaded_async()
-    _master_data.build_from_entries(_db.entries)
-    await _persist_master_state_async()
-    return {"success": True, "data": _master_data.overview()}
-
-
-@router.post("/master/courses", summary="新建课程", dependencies=_ADMIN_ONLY)
-@_master_write
-async def master_upsert_course(req: _CourseIn):
-    await _ensure_loaded_async()
-    _ensure_master_data()
-    try:
-        _master_data.upsert_course(req.name)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    await _persist_master_state_async()
-    return {"success": True, "data": _master_data.overview()}
-
-
-@router.delete("/master/courses/{name}", summary="删除课程", dependencies=_ADMIN_ONLY)
-@_master_write
-async def master_delete_course(name: str):
-    # R39：删默认课程会抛 ValueError（见 master_data.delete_course）。
-    # 不接住就是 500 —— 那会显示"服务端出错"，教秘以为是系统坏了，
-    # 而这其实是一条可以照着做的操作提示。
-    await _ensure_loaded_async()
-    _ensure_master_data()
-    try:
-        _master_data.delete_course(name)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    await _persist_master_state_async()
-    return {"success": True, "data": _master_data.overview()}
-
-
-@router.post("/master/experiments", summary="新建/更新实验项目", dependencies=_ADMIN_ONLY)
-@_master_write
-async def master_upsert_experiment(req: _ExperimentIn):
-    await _ensure_loaded_async()
-    _ensure_master_data()
-    try:
-        _master_data.upsert_experiment(
-            req.name, course=req.course or "", teachers=req.teachers,
-            rooms=req.rooms, classes=req.classes)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    await _persist_master_state_async()
-    return {"success": True, "data": _master_data.overview()}
-
-
-@router.delete("/master/experiments/{name}", summary="删除实验项目", dependencies=_ADMIN_ONLY)
-@_master_write
-async def master_delete_experiment(name: str):
-    _ensure_master_data()
-    _master_data.delete_experiment(name)
-    await _persist_master_state_async()
-    return {"success": True, "data": _master_data.overview()}
-
-
-@router.post("/master/teachers", summary="新建/更新教师", dependencies=_ADMIN_ONLY)
-@_master_write
-async def master_upsert_teacher(req: _TeacherIn):
-    await _ensure_loaded_async()
-    _ensure_master_data()
-    try:
-        _master_data.upsert_teacher(req.name, projects=req.projects)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    await _persist_master_state_async()
-    return {"success": True, "data": _master_data.overview()}
-
-
-@router.delete("/master/teachers/{name}", summary="删除教师", dependencies=_ADMIN_ONLY)
-@_master_write
-async def master_delete_teacher(name: str):
-    _ensure_master_data()
-    _master_data.delete_teacher(name)
-    await _persist_master_state_async()
-    return {"success": True, "data": _master_data.overview()}
-
-
-@router.post("/master/rooms", summary="新建/更新场地", dependencies=_ADMIN_ONLY)
-@_master_write
-async def master_upsert_room(req: _RoomIn):
-    await _ensure_loaded_async()
-    _ensure_master_data()
-    try:
-        _master_data.upsert_room(req.name, capacity=req.capacity)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    await _persist_master_state_async()
-    return {"success": True, "data": _master_data.overview()}
-
-
-@router.delete("/master/rooms/{name}", summary="删除场地", dependencies=_ADMIN_ONLY)
-@_master_write
-async def master_delete_room(name: str):
-    _ensure_master_data()
-    _master_data.delete_room(name)
-    await _persist_master_state_async()
-    return {"success": True, "data": _master_data.overview()}
-
-
-@router.post("/master/classes", summary="新建/更新班级", dependencies=_ADMIN_ONLY)
-@_master_write
-async def master_upsert_class(req: _ClassIn):
-    await _ensure_loaded_async()
-    _ensure_master_data()
-    try:
-        _master_data.upsert_class(req.name, groups=req.groups, weekday=req.weekday or "",
-                                  time_slots=req.time_slots, week_min=req.week_min,
-                                  week_max=req.week_max, weekdays=req.weekdays)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    await _persist_master_state_async()
-    return {"success": True, "data": _master_data.overview()}
-
-
-@router.delete("/master/classes/{name}", summary="删除班级", dependencies=_ADMIN_ONLY)
-@_master_write
-async def master_delete_class(name: str):
-    _ensure_master_data()
-    _master_data.delete_class(name)
-    await _persist_master_state_async()
-    return {"success": True, "data": _master_data.overview()}
-
-
-@router.post("/master/import-preview", summary="预览主数据台账导入（只读，不写入）",
-             dependencies=_ADMIN_ONLY)
-async def master_import_preview(file: UploadFile = File(...)):
-    """导入向导第 2 步：把文件解析成「页 → 列 → 字段」映射给教秘看，**不写任何状态**。
-
-    与 `/master/import` 共用 `parse_workbook`（同一份选页/匹配/统计列/行转换
-    代码）：预览报的"将导入 N 行、没认出哪些列"就是点确认后真正发生的导入，
-    不会出现"预览说 12 行、导入进 9 行"的错版（R-34 同族：校验器与被验对象
-    必须同源）。
-
-    刻意不落盘：预览是纯读路径，文件走内存 BytesIO 解析，
-    `_DATA_DIR` 里不该留下一个谁都不会再看的临时文件。
-    """
-    content = await _read_upload_limited(file)
-    try:
-        from app.master_workbook import preview_workbook
-
-        report = preview_workbook(io.BytesIO(content))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"台账解析失败：{e!s}")
-    return {"success": True, "kind": "workbook", "data": report}
-
-
-@router.post("/master/tasks-preview", summary="预览教学任务清单导入（只读，不写入）",
-             dependencies=_ADMIN_ONLY)
-async def master_tasks_preview(file: UploadFile = File(...)):
-    """导入向导第 2 步（清单版）：只解析不写入。
-
-    `_master_tasks` / `db.pending` 都不碰 —— 确认走 `/upload-master`，
-    它自己会再完整解析一次（同一份代码，结果逐字一致）。
-    认不出「班级/实验项目」两列时这里就 400 说清缺什么，不用等导入那一刻
-    才发现整份文件白传。
-    """
-    content = await _read_upload_limited(file)
-    try:
-        from app.utils.excel_parser import preview_master_tasks
-
-        report = preview_master_tasks(io.BytesIO(content))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"清单解析失败：{e!s}")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"清单解析失败：{e!s}")
-    # R49：确认（`/upload-master`）是**整批替换**语义（先 clear 再 extend），
-    # 而预览只说"将读入 N 条"—— 教秘读到的是"再加 N 条"。
-    # 行为不改（替换本来就是这套清单的设计，见 `clear_master_tasks` 的说明），
-    # 补的是**说明**：把"现有几条、会被整体换掉"一并给出，让预览与提交对得上。
-    report["existing_tasks"] = len(_master_tasks)
-    return {"success": True, "kind": "tasks", "data": report}
-
-
-@router.post("/master/import", summary="导入主数据台账（Excel 批量维护五张表）",
-             dependencies=_ADMIN_ONLY)
-@_master_write
-async def master_import(file: UploadFile = File(...)):
-    """把 `/export/master-workbook` 导出的台账改完传回来，批量写入主数据。
-
-    这是 P2 的最后一块闭环：教秘在 Excel 里一次性补几十个项目/教师/班级，
-    比在界面上一个个点快得多。语义上**只做新增与补充，不做删除** ——
-    在表里删掉一行不会删掉实体（删请用上面的 delete 接口），理由写在
-    `master_workbook` 的填写说明里：Excel 里的"空"可能是"没填"，
-    也可能就是"没变"，导入端不猜这个意图。
-
-    返回体一定带 `report`：认出哪些页、哪些列没认出、跳过了哪些行、
-    哪些列被判为统计列而忽略 —— 静默导入一半比报错危险得多（R-34）。
-    """
-    save_path = _upload_target(file.filename, _EXCEL_SUFFIXES, prefix="master_")
-    content = await _read_upload_limited(file)
-    with open(save_path, "wb") as f:
-        f.write(content)
-
-    try:
-        from app.master_workbook import apply_tables, parse_workbook
-
-        tables, report = parse_workbook(save_path)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"台账解析失败：{e!s}")
-
-    await _ensure_loaded_async()
-    _ensure_master_data()
-    # R54：先记下"导入前主数据有哪些名字"，用于判断"预览之后变了什么"。
-    #
-    # 导入是两阶段（预览 → 确认），中间可能隔几分钟。这期间别人可能已建出
-    # 同名实体 —— 于是预览说"新增1个"、提交说"新增0个"。**两个数字都对**，
-    # 但它们描述的不是同一件事；教秘看到 added=0 会以为导入失败。
-    names_before = {
-        k: set(getattr(_master_data, k)) for k in
-        ("courses", "experiments", "teachers", "rooms", "classes")
-    }
-    try:
-        stats = apply_tables(_master_data, tables)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"台账写入失败：{e!s}")
-    await _persist_master_state_async()
-
-    total = sum(s.get("rows", 0) for s in stats.values())
-    added = sum(s.get("added", 0) for s in stats.values())
-    if total == 0:
-        msg = ("⚠️ 台账里没读到任何可导入的行 —— "
-               + ("；".join(report["warnings"]) or "请确认文件里有「实验项目/教师/场地/班级/课程」页且有表头"))
-    else:
-        msg = f"✅ 已导入 {total} 行（新建实体 {added} 个）；导入只增补，不删除已有实体"
-
-    # R42：新增实体必须**点名**。
-    #
-    # 教秘把「教师C」改成「教师C改」再导入，得到的正是"新建实体 1 个" ——
-    # 而他想的是"改好了"。不点名的话，他无处判断这 1 个是不是自己那行。
-    # 等下次排课发现"教师C改"没有课、"教师C"还有 116 条课，已经过去很久。
-    added_names = {k: v.get("added_names") or [] for k, v in stats.items()}
-    flat = [(k, n) for k, names in added_names.items() for n in names]
-    if flat:
-        label = {"courses": "课程", "experiments": "实验项目",
-                 "teachers": "教师", "rooms": "场地", "classes": "班级"}
-        shown = "、".join(f"{label.get(k, k)}「{n}」" for k, n in flat[:8])
-        msg += f"\n🆕 本次新建：{shown}"
-        if len(flat) > 8:
-            msg += f" 等 {len(flat)} 个"
-        msg += "\n（导入按**名称**识别实体：改名会被当成「新增一个」，原名称仍然保留。要改名请在界面上操作）"
-
-    # R54：文件里有、但**导入前主数据里已经存在**的实体 —— 它们不会被算作"新增"，
-    # 因为 `apply_tables` 只补不改。若其中有"预览时还不存在"的，说明这期间
-    # 数据被别人改过：必须说出来，否则教秘会把"新增 0 个"读成"导入没生效"。
-    label_all = {"courses": "课程", "experiments": "实验项目",
-                 "teachers": "教师", "rooms": "场地", "classes": "班级"}
-    preexisting = {}
-    for key, rows in tables.items():
-        if key not in names_before:
-            continue
-        want = {str(r.get("name") or "").strip() for r in (rows or [])}
-        want.discard("")
-        hit = sorted(want & names_before[key])
-        if hit:
-            preexisting[key] = hit
-    # R54：什么时候该提示"这些实体导入前就已存在"？
-    #
-    # 判据不是"有没有已存在项"（那太常见：重复导入同一份文件会命中 66 个），
-    # 而是**教秘会不会因此误解**：
-    #
-    #   added == 0 且文件里确实有内容 → 很可能是"预览说会新增、实际没有"，
-    #                                   或"重复导入"。必须说明，否则读成"导入失败"
-    #   added > 0 且也有已存在项      → 预览可能只看到一部分，也要说明
-    #   added > 0 且全是新增          → 无歧义，不提示
-    #
-    # 实测反例（不加这个分支时）：预览说新增 1 个，中间被别人建出来，
-    # 提交得到 added=0、message 只有"新建实体 0 个" —— 教秘以为导入没生效。
-    flat_pre = [(k, n) for k, names in preexisting.items() for n in names]
-    if flat_pre and (added == 0 or flat):
-        shown_pre = "、".join(f"{label_all.get(k, k)}「{n}」" for k, n in flat_pre[:6])
-        if len(flat_pre) > 6:
-            shown_pre += f" 等 {len(flat_pre)} 个"
-        msg += (f"\nℹ️ 其中 {len(flat_pre)} 个在导入前就已存在（只补充、不重复创建）：{shown_pre}")
-        msg += ("\n  ⚠️ 若与预览时看到的不一致，说明这期间台账已被别处修改 ——"
-                " 以上面的**实际结果**为准。")
-
-    report["added_names"] = added_names
-
-    return {"success": total > 0, "message": msg,
-            "data": _master_data.overview(), "stats": stats, "report": report}
 
 
 @router.get("/export/master-workbook", summary="导出可编辑主数据台账（改完可导回）",
@@ -1684,225 +1345,6 @@ async def parallel_export(req: ParallelExportRequest):
         ws.column_dimensions[col].width = w
 
     return _xlsx_response(wb, f"并行排课方案_{req.class_name}.xlsx")
-
-
-# ---------------------------------------------------------------------------
-# 方案落地（预览 → 采纳 → 撤销）
-#
-# 为什么需要：全校一键算出的方案此前只能看、只能导出 —— 安排表（db.entries）
-# 还是原来上传的那份，看板 / 班级课表 / 数据体检用的都是旧数据，教秘必须把
-# Excel 人工录回教务系统。"排完了"和"能交付"之间差最后一公里。
-#
-# 三步的理由：这改的是**真实排课数据**（433 → 410 不是数字变化，是某些行的
-# 时间/教师/场地被正式改写）。所以① 先出差异预览（不写入）② 教秘确认后才写
-# ③ 写完可撤销（恢复落地前快照）。采纳时 diff **重新计算**：预览与采纳之间
-# 若有审批调课生效，按旧 diff 写入就是偷换（R-36：写路径的不实必须可见）。
-#
-# 鉴权边界：预览/状态只读（随 /parallel/** 免鉴权）；采纳/撤销是写
-# （与 /upload、/apply-move 一致挂 require_admin）。
-#
-# 粒度说明：只有**班级×项目×学生组**口径的方案（全校一键 / 单班并行排课）
-# 能落地 —— 与安排表同构。首屏「一键自动排课」的初稿是教师×课程口径、
-# 没有学生组，落进安排表会凭空编造组别，故不支持（前端只给全校方案开放入口）。
-# ---------------------------------------------------------------------------
-
-class LandPlanRequest(BaseModel):
-    """落地方案请求。与 /parallel/export 同构：方案由前端带上，服务端不存会话态。"""
-    schedule: list
-    class_name: Optional[str] = None   # 单班方案补班级名（全校一键结果已自带）
-    note: Optional[str] = None
-
-
-def _land_plan_or_400(req: LandPlanRequest) -> List[dict]:
-    """校验方案行。缺字段的行**报错列出**，绝不静默丢弃（R-35 同族）。"""
-    try:
-        plan = plan_landing.normalize_plan(req.schedule, default_class=req.class_name)
-    except plan_landing.PlanValidationError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=(f"方案有 {len(e.bad)} 行缺少必填字段（班级/项目/组/周次/星期/时段），"
-                    f"未做任何改动。问题行示例：{e.bad[:3]}"))
-    if not plan:
-        raise HTTPException(
-            status_code=400,
-            detail="方案为空：没有可落地的排课行。请先在「并行排课」中生成方案，再回到这里落地方案。",
-        )
-    return plan
-
-
-@router.post("/parallel/land/preview", summary="落地预览：方案与当前安排表的差异（不写入）",
-             dependencies=[Depends(export_gate), Depends(rate_limit("parallel-land"))])
-async def land_preview(req: LandPlanRequest):
-    """差异预览：新增 / 调整 / 未覆盖 / 原样保留四类账 + 警告。绝不写入。"""
-    await _ensure_loaded_async()
-    plan = _land_plan_or_400(req)
-    diff = plan_landing.diff_plan(plan, _db.entries)
-    diff["success"] = True
-    return diff
-
-
-def _locked_land_commit(plan: List[dict], note: str, actor: str):
-    """落地的阻塞主体（跑在线程池里）：`with _land_lock:` 里全是同步活。
-
-    R75：为什么锁必须在**工作线程**里拿
-    ------------------------------------
-    这段以前直接写在 `async def land_commit` 体内 —— 而 `_land_lock` 是同步的
-    `threading.Lock`。于是事件循环会被按在地上，两种情形都算：
-
-    ① **等锁**：`_land_lock` 同时是 `_db.entries` 的写锁（`_DB_WRITE_LOCK`，R28）。
-       另一个请求（调课 / 审批 / 撤销）正在锁内跑，这里就在**事件循环线程**上原地等。
-    ② **锁内的 sqlite 写入**：`save()` 遇到锁竞争要等满 busy_timeout。R74 实测
-       单次 5.50 s、`undo` 两次尝试 11.04 s（`R74-new/probe_lock.py`）。
-
-    实测（R74 `probe_loop.py`，50 ms 心跳）：真锁 + 同步（即原来的形状）心跳最大滞后
-    **11076 ms**；同样时长的等待丢进工作线程后 **14 ms**。一次被锁的落地/撤销 =
-    整站 11 秒不响应，并发请求、健康检查、SSE 心跳全部排队。
-
-    ⚠️ 反例（很容易写错的那种）：把 `with _land_lock:` 留在 async 函数里，
-    再在锁内 `await run_in_threadpool(...)` —— 锁仍然是在**事件循环线程**上等到的，
-    ①②一个都没解决。锁一定要和被保护的活待在**同一条工作线程**里。
-
-    锁内顺序不能动：diff 现算（不信预览那一份，预览与采纳之间可能有审批调课生效）
-    → snapshot（撤销用）→ apply → save（失败 restore 再抛）。
-    """
-    with _land_lock:
-        diff = plan_landing.diff_plan(plan, _db.entries)
-        before = plan_landing.snapshot(_db)
-        applied = plan_landing.apply_plan(_db, plan)
-        try:
-            rec = _landings().save(plan, before, note=note, actor=actor)
-        except Exception as e:
-            plan_landing.restore(_db, before)
-            raise HTTPException(
-                status_code=500,
-                detail=f"落地方案落盘失败，已回滚内存改动（安排表未被修改）：{e}")
-    return diff, rec, applied
-
-
-@router.post("/parallel/land", summary="落地采纳：把方案写回安排表（需管理员）",
-             dependencies=_ADMIN_ONLY + [Depends(rate_limit("parallel-land"))])
-async def land_commit(req: LandPlanRequest, land_by: str = Depends(require_admin)):
-    """写入安排表并落盘（landed_plans 表）。落盘失败回滚内存改动。
-
-    为什么落盘失败要回滚内存：否则"内存已改、重启丢失"，教秘会在下一次刷新后
-    看到方案神秘消失 —— 与 R-36「审批通过课表一个字节没变」同族的不实。
-
-    R75：锁 + 落盘整段下沉线程池（`_locked_land_commit`）。此前它是 `async def`
-    里同步 `with _land_lock:`，锁竞争时把**事件循环**一起按住（实测 11076 ms）。
-    """
-    await _ensure_loaded_async()
-    plan = _land_plan_or_400(req)
-    diff, rec, applied = await run_in_threadpool(
-        _locked_land_commit, plan, req.note or "", land_by or "")
-    diff.update({"success": True, "landed_at": rec["landed_at"],
-                 "after_entries": applied["total"],
-                 # R58：谁落的 —— 撤销/历史面板要能对上人
-                 "landed_by": rec.get("actor") or land_by or ""})
-    # R60：这条链路唯一拿不到人话回执的一步（R50 断点②）。四个差异账、长实验
-    # 截短、能不能撤，全部由 `landing_receipt` 一次说完。放在 update 之后算 ——
-    # 用的是**实际写入后**的 after_entries，不是 diff 推算值。
-    diff["message"] = plan_landing.landing_receipt(
-        diff, landed_at=rec["landed_at"], actor=diff["landed_by"])
-    return diff
-
-
-def _locked_land_undo(actor: str) -> dict:
-    """撤销的阻塞主体（跑在线程池里）。理由与 `_locked_land_commit` 同一条。
-
-    R75 实测（R74 取证脚本）：另一条连接 `BEGIN IMMEDIATE` 持锁时，`undo` 里的
-    `revoke` 单次等 **5.50 s** 后抛 `database is locked`，重试再一次 ⇒ 整个 `undo`
-    **11.04 s**；而这段时间原先整段压在事件循环上（心跳最大滞后 11076 ms）。
-    下沉之后 `undo` 仍要 11.04 s（sqlite 的 busy_timeout 没变），但事件循环只滞后 14 ms。
-
-    锁内做两件事：撤销本身 + **在锁内**读 `latest()` 算回执。
-    后者必须在锁内：锁外读会被并发落地插队，回执说的就不是"这次撤销之后"的状态。
-    """
-    with _land_lock:
-        out = plan_landing.undo(_db, _landings(), actor=actor)
-        if out.get("success"):
-            # R73：撤销是"弹一条"，不是"清空" —— 库里可能还留着**更早**的落地。
-            # 回执必须说清"撤销之后还剩什么"，否则横幅写"已撤销落地"、下面的状态栏
-            # 照旧写"已是落地方案"，同一屏两句话互相打脸（实测过的那个组合）。
-            out["message"] = plan_landing.undo_receipt(
-                out, remaining=_landings().latest())
-    return out
-
-
-@router.post("/parallel/land/undo", summary="撤销最后一次落地（需管理员）",
-             dependencies=_ADMIN_ONLY + [Depends(rate_limit("parallel-land"))])
-async def land_undo(actor: str = Depends(require_admin)):
-    """恢复落地前快照并弹出记录。落地之后生效的调课会一并回滚 —— 计数如实报出。
-
-    `actor` 由 `require_admin` 依赖注入（它返回管理员账号）——
-    撤销是一条**要追责的写操作**，不记"谁撤的"就等于没留痕。
-
-    失败分两型（R61）：
-    - `no_record`：库里没有可撤销的记录 → **404**，这是"资源不存在"，语义正确。
-    - `revoke_failed`：课表**已经**回滚到落地前，只是撤销标记没写进 sqlite（重试
-      两次都失败）→ **500**。此前这里一律 404，于是三种代价同时发生：
-      ① 界面写"没有可撤销的记录"，而安排表其实已经退了；
-      ② `rolled_back: true`、`restored_entries` 这些**已发生事实**随异常一起丢掉，
-         前端无从判断"该不该重试撤销"（该），只会看到一句 generic 报错；
-      ③ 教秘以为撤销没生效，转头去"重新落地"，把刚退掉的方案又落回去。
-      所以这一型返回 500 + 完整结构，只额外补一个 `detail` 字符串给通用
-      `describeApiError` 读取（前端不认结构也能拿到人话）。
-
-    R73：成功分支补 `message`（`plan_landing.undo_receipt`）。此前成功只回字段，
-    前端自己拼"已撤销落地，安排表恢复到 N 条" —— 既不说撤的是哪一次，也不说
-    撤销之后**还有更早一次落地在生效**（此时 `/land/status` 仍报 landed=True）。
-
-    R75：锁 + 撤销整段下沉线程池（`_locked_land_undo`）。此前是 `async def` 里同步
-    `with _land_lock:`，而 `undo` 在锁竞争下要等两次 busy_timeout（实测 11.04 s）——
-    这 11 秒里事件循环完全停摆（心跳最大滞后 11076 ms）。
-    """
-    await _ensure_loaded_async()
-    with _land_lock:
-        out = await run_in_threadpool(
-            plan_landing.undo, _db, _landings(), actor or "")
-        if out.get("success"):
-            out["message"] = plan_landing.undo_receipt(
-                out, remaining=_landings().latest())
-    if out.get("success"):
-        return out
-    if out.get("error_kind") == "no_record":
-        raise HTTPException(status_code=404, detail=out["error"])
-    return JSONResponse(status_code=500, content={**out, "detail": out["error"]})
-
-
-@router.get("/parallel/land/history", summary="落地历史（含已撤销，需管理员）",
-            dependencies=_ADMIN_ONLY + [Depends(rate_limit("parallel-land-status"))])
-async def land_history(limit: int = 20):
-    """最近的落地记录，**含已被撤销的**。
-
-    为什么单独开这个接口：`/land/status` 只回答"现在有没有落地方案"。
-    排查时要回答的是另一类问题 —— "上周谁落过方案、后来又撤了没有"。
-    撤销不再删记录之后（R55），这两个问题的答案分别来自 `latest()` 和 `history()`。
-
-    ⚠️ 这个端点曾被并发会话的一次推送整段删掉（对方拿着旧的 reschedule.py 覆盖），
-    表现为前端历史面板**静默消失**（面板对 404 做了降级）—— 又是一个"没有报错的
-    功能消失"。恢复时按"远端原文 + 补丁"重建，见 R58 台账。
-    """
-    await _ensure_loaded_async()
-    rows = _landings().history(limit=limit)
-    return {"success": True, "total": len(rows),
-            "active": sum(1 for r in rows if not r["revoked"]),
-            "revoked": sum(1 for r in rows if r["revoked"]),
-            "history": rows}
-
-
-@router.get("/parallel/land/status", summary="当前落地状态（供界面显示撤销入口）",
-            dependencies=[Depends(rate_limit("parallel-land-status"))])
-async def land_status():
-    """是否已落地、何时、多少条。_ensure_loaded 保证重启重放之后再回答。"""
-    await _ensure_loaded_async()
-    rec = _landings().latest()
-    if not rec:
-        return {"landed": False}
-    return {"landed": True, "landed_at": rec["landed_at"],
-            "plan_rows": len(json.loads(rec["plan_json"])),
-            "after_entries": rec["after_entries"], "note": rec["note"],
-            # R58：界面显示撤销入口时，顺便说清"这是谁落的"
-            "landed_by": rec.get("actor") or ""}
 
 
 # ---------------------------------------------------------------------------
@@ -3496,3 +2938,62 @@ async def apply_move(req: ApplyMoveRequest):
             "data": {"applied": applied, "skipped": skipped, "details": details,
                      "conflicts": conflicts},
             "message": message}
+
+
+# ---------------------------------------------------------------------------
+# R76/R77：落地方案端点族搬到 `app/api/landing.py`，主数据维护端点族搬到
+# `app/api/master.py`，旧名在此惰性转发
+#
+# 测试里有 `api.land_commit` / `api.LandPlanRequest` 这类**模块属性**直调写法
+# （`tests/test_event_loop_blocking.py` 用 `asyncio.run(api.land_commit(...))`
+# 直接驱动端点，测锁到底在不在工作线程上）。搬一次家若顺手改这些调用点，等于
+# 顺手改了守卫本身 —— 而这一族正是 R73 / R74 / R75 三个连续缺陷的守卫所在。
+#
+# 用模块级 `__getattr__`（PEP 562）而不是文件末尾 `from app.api.landing import ...`：
+#   ① 普通 import 会成环 —— `landing` 顶部要 `from app.api import reschedule` 取状态
+#      （`_db` / `_land_lock` 是可变模块属性，必须每次现取），本模块再反向 import 它，
+#      先被导入的那一侧会拿到半初始化的模块并抛 ImportError（本轮实测过）。
+#   ② `__getattr__` 只在**属性不存在时**触发，导入期一次都不跑，环自然不存在。
+#   ③ `landing` 先被导入也不会炸：它的 import 会先把本模块完整跑完，
+#      `__getattr__` 到调用点才执行。
+# 代价：`dir(reschedule)` 与 IDE 补全看不到这几个名字。它们只被测试引用，
+# 生产代码没有任何一处 `reschedule.land_*`（本轮全仓 grep 确认）。
+# ---------------------------------------------------------------------------
+_LANDING_MOVED = frozenset({
+    "LandPlanRequest", "_land_plan_or_400", "land_preview",
+    "_locked_land_commit", "land_commit", "_locked_land_undo", "land_undo",
+    "land_history", "land_status",
+})
+
+
+# R77：主数据维护端点族搬到 `app/api/master.py`。
+#
+# 与 landing 同一套理由，但多一条**具体的**：这一族有 5 个请求体模型
+# （`_CourseIn` / `_ExperimentIn` / `_TeacherIn` / `_RoomIn` / `_ClassIn`）。
+# 模型跟着端点走，不留在 reschedule 里 —— 否则"字段定义在这、用它的接口在那"，
+# 下一次加字段时改了模型以为生效，实际搬走的那个端点读的是另一份定义。
+#
+# 这里**不**转发的那几个（`/export/master-workbook` 与 `_master_workbook_bytes` /
+# `_master_workbook_build`）确实还在本模块：它们属于导出族（缓存 + 线程池 + 门禁），
+# 与"维护主数据"是两件事，留给导出族整块搬的那一轮。
+_MASTER_MOVED = frozenset({
+    "_CourseIn", "_ExperimentIn", "_TeacherIn", "_RoomIn", "_ClassIn",
+    "master_overview", "master_init",
+    "master_upsert_course", "master_delete_course",
+    "master_upsert_experiment", "master_delete_experiment",
+    "master_upsert_teacher", "master_delete_teacher",
+    "master_upsert_room", "master_delete_room",
+    "master_upsert_class", "master_delete_class",
+    "master_import_preview", "master_tasks_preview", "master_import",
+})
+
+
+def __getattr__(name):
+    """R76/R77 搬迁后的旧名转发（landing / master）。`from app.api.reschedule import land_commit` 同样生效。"""
+    if name in _LANDING_MOVED:
+        from app.api import landing
+        return getattr(landing, name)
+    if name in _MASTER_MOVED:
+        from app.api import master
+        return getattr(master, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

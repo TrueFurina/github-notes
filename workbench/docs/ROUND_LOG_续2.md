@@ -746,3 +746,104 @@ ruff `All checks passed`，与 R55 改后基线 `diff` 空；行尾 CRLF=0 / 185
 - **CI**：`2079c07815` → **`41455896542` success**，3 job / 27 step 全绿（8/8/11），
   CI 内 **782/32/127.60s**、前端 **21/157**。
 - 推送校验：代码 1/1、笔记 13/13 逐文件 git blob sha1 **全部 identical（0 mismatch / 0 missing）**。
+
+## 21:52–22:20 · R75：把"11 秒按住整站"关掉（顺手改法会死锁）
+
+接 R74 遗留。上一轮只测了函数、没改端点 —— `land_undo` 仍是 `async def` 里同步
+`with _land_lock:`，真锁下 undo 11.04 s、事件循环停摆 11076 ms。
+
+- **取证**（`R75-new/probe_endpoint_loop.py`，A/B 同一段业务，只改跑在哪条线程）：
+  A 旧形状 busy=0.15s → 耗时 0.469s、心跳滞后 **459.0 ms**；
+  B 新形状 → 0.484s、**6.0 ms**；B′ 生产 5s → undo **11.047 s**、心跳 **22.0 ms**（714 拍）；
+  `land_commit` 持锁场景 → 0.235s 内 `database is locked`、500 回滚文案完整、心跳 21 ms。
+- **改法**：新增两个同步主体 `_locked_land_commit` / `_locked_land_undo`，
+  `with _land_lock:` **一起**搬进工作线程；端点改 `await run_in_threadpool(...)`。
+  404/500 分型、`landing_receipt`、`undo_receipt`（锁内读 `latest()`）一字未动。
+- **关键判据**：锁竞争有两个面 —— "锁内的活"和"等锁本身"。只把 `undo` 包进线程池是
+  **错的**：`with _land_lock:` 留在事件循环上，等锁仍在事件循环线程发生。
+- **V4 变异 = 那种顺手改法 → 死锁**：两个撤销并发，第二个在事件循环线程等锁 ⇒ 循环停死
+  ⇒ 第一个永远回不来（整文件 90 s 跑不完，逐条定位确认是 `..._still_serialize` 挂死）。
+- **测试 +5**（全在 `test_event_loop_blocking.py`）：撤销线程、落地线程、锁内等待心跳
+  （真锁 0.15 s）、等锁心跳（另一线程持锁 0.35 s）、并发峰值=1。心跳两条都写
+  "确实等了 ≥0.3 s **且** 滞后 <150 ms"，缺一半就没意义。
+- **定向变异 4/4**：V1 3 red、V2 2 red、V3 1 red、V4 1 red + 1 挂死；每条复原后 md5 一致。
+- **全量变异 56/56**（零删除 + junit 取数 + 每条独立 TEMP，用时 2m04s；R74 同套要 ~10min）。
+  32 条 reschedule 相关锚点全部仍命中（含 M43 落盘失败回滚），搬家没丢守卫。
+- 🔴 **第 11 次仪器教训**：V4 死锁导致执行器被 SIGTERM，`finally: restore()` 没执行，
+  `reschedule.py` 留在变异态（`64e65b7fe6` vs 备份 `302ede98a8`），靠外部 md5 比对发现。
+  修：子进程 `timeout=90` + 正常控制流里复原 + 每条打印 `matches_backup`。
+- 🟡 第 12 条小教训：`-k "land_"` 把 `test_two_concurrent_undos_still_serialize` 静默过滤，
+  V2 少报一条红；改成跑整文件。**过滤式选择器会把守卫排除在外。**
+- **实测**：pytest **787/32/0**（819 tests，175.04 s）、测试文件 81（只追加）、前端 21/157、
+  ruff 两版 0、审计门 exit 0（两个端点重活列已是 `-`）。
+- **CI**：`89a484f1a2` → **`41460986429` success**，3 job / 27 step 全绿，
+  CI 内 **787/32/142.54 s**、前端 **21/157**。
+- 没做：端到端真锁 HTTP 用例（默认 5s 连接，一条白等 22s）；线程池 40 token 被"等锁请求"
+  占满的风险（比停摆好，但不是零代价，写进文档 §9）；审计脚本的"锁等待不可见"限制未改。
+
+> 📍 常备操作情报权威源仍在 **:7678**（未重贴，避免体积膨胀；R51 起各轮 prompt 已按行号直取）
+> 该段标题时间戳：2026-10-31 21:30
+
+值守体检 22:42：脚本OK iso_prep OK webui OK audit OK mutbak 12 py OK 行数11920 ⚠️体积
+
+值守核验 R51：成对OK shaOK 远端较新OK
+
+---end 值守 22:42---
+
+## 22:28–23:10 · R76：把落地方案一族搬出 reschedule.py（搬迁顺手撞出「门只看了一半」）
+
+接 R75。将锁与活一起搬进工作线程后，`reschedule.py` 仍有 3311 行；而 R73/R74/R75 三轮的
+改动**全部**集中在其中 214 行（预览 / 采纳 / 撤销 / 历史 / 状态）—— 它已经是独立的变化单元，
+只是还挤在 3300 行的文件中段。
+
+- **搬了什么**：`LandPlanRequest` / `_land_plan_or_400` / `land_preview` /
+  `_locked_land_commit` / `land_commit` / `_locked_land_undo` / `land_undo` /
+  `land_history` / `land_status` → 新模块 `app/api/landing.py`（267 行）；
+  `reschedule.py` 3493 → **3311 行**（-182）。
+- **行为零改动**：同 prefix + 同 tags 挂载，`/openapi.json` 里 5 条路径一字未变；
+  旧名在 `reschedule.__getattr__`（PEP 562）里**惰性**转发，测试零改动
+  （`api.land_commit` / `from app.api.reschedule import land_undo` 都照旧）。
+  普通 import 试过，实测直接炸：`ImportError: cannot import name ... from partially
+  initialized module` —— 名字级 `from X import y` 在 X 未执行完时拿不到，子模块形式才走
+  `sys.modules` 回退。
+- **最关键的一条**：状态必须写 `_api._db`（模块属性，每次现取），不能
+  `from app.api.reschedule import _db`。后者拿到导入那一刻的对象，测试的
+  `monkeypatch.setattr(reschedule, "_db", ...)` **全部失明，而且不报错**。
+- **10 条新守卫**（`tests/test_landing_module_split.py`，290 行）：路由归属 / 旧模块不留
+  第二份 / openapi 五条不变 / 无同名函数残留 / 旧名转发 / 值绑定（AST）/ 锁 `is` 恒等 /
+  只许用共享锁（AST）/ async 不许同步持锁（扫整个 api 目录）/ async 不许直接调阻塞加载。
+  后两条是**补回搬迁削弱的覆盖面**：`test_event_loop_blocking.py` 的源码守卫只读
+  `reschedule.__file__`，且比的是整行文本，对 `_api._ensure_loaded()` 完全失明。
+- **定向变异 5/5**：V1 值绑定、V2 第二把锁、V3 第二份路由、V4 锁回事件循环、
+  V5 同步加载 —— 每条都要求**期望的那条用例**出现在 junit 失败清单里（只红无关用例不算），
+  复原后 md5 与备份逐字节一致（`landing.py` 0db2b80f0a、`reschedule.py` e0fcec2f13）。
+- 🔴 **第 13 条仪器教训（本轮新形态）**：`scripts/audit_async_blocking.py` 写的是
+  `path = args[0]`。第一次跑 `audit_async_blocking.py reschedule.py landing.py`，
+  表里只有 48 条 reschedule 路由、landing 的 5 条**一条没出现**，而 `rc=0`、
+  结尾照样印「✅ 零 await 轻查询与基线一致」。
+  **一道门把一半代码看漏时不会变红，只会变得安静 —— 比没有这道门更糟，
+  因为它给的是"已覆盖"的错觉。** 与 R75 的 `-k "land_"` 属同一族：过滤式选择器
+  不会告诉你它滤掉了什么。修法：① 脚本拒绝多参数（宁可报错不猜）；
+  ② CI 改两条命令；③ 新增 `--no-baseline`（不比对基线，但零 await 路由照样判红 ——
+  基线是按单文件攒的，拿它比 landing 只会印一句假的"消除了 8 个"）。
+- 🟡 **第 14 条**：新守卫第一版用 `ast.walk(async_fn)` 收集 `with`，把
+  `approve_request` / `apply_move` 报成违规 —— 而它们是**正确**写法（锁在 `async def`
+  里嵌的**同步**函数里，随 `run_in_threadpool` 进工作线程）。改成"只走一层作用域，
+  遇 FunctionDef/AsyncFunctionDef/Lambda/ClassDef 停住"才准。
+  **这条自我推翻反过来成了证据**：守卫确实能区分「锁在 async 里」（R75 的病）与
+  「锁在 async 内嵌的同步函数里」（R75 的药）。
+- **顺手撞出的第二件**：README 数字守卫（容差 10%）被撞 —— 加 10 条测试后
+  `829 × 0.9 = 746 > 737`。4 处 `737` 更新为 **829 后端 / 157 前端**；
+  顺带补上 README 里那个**空着的**前端数字（`前端  个测试`）。
+- **M39 首跑无效**：全量变异第 39 条报「没有 junit 报告（子进程被杀）」，
+  单条重跑立刻 `1 failed / 9 passed`，`check_remote_drift.py` 复原 md5 一致；
+  手工注入同一变异单独跑也正常。属偶发，**口径记成 55 条一次通过 + 1 条重跑命中**，
+  不写成"56 一次全过"。
+- **实测**：pytest **797/32/0**（829 tests，207.47 s）、测试文件 **82**、前端 21/157、
+  ruff 0、审计门两文件各 exit 0、全量变异 56/56、定向变异 5/5。
+- **CI**：`ffc4f0ffec` → **`41467367581` success**（3 job / 27 step 全绿），
+  CI 内 **797/32/105.10 s**、前端 21/157、import smoke 52 endpoints；
+  审计门两条命令都在跑（reschedule「与基线一致」+ landing「零 await 0」）。
+- 没做：`reschedule.py` 仍有 3311 行（主数据 CRUD / 导出 / 工单 / 聊天四块未拆）；
+  `_landings` / `_land_lock` / `_DB_PATH` 仍住在 reschedule（抽 `app/state.py` 是另一轮）；
+  端点层真锁 HTTP 用例；线程池 40 token 被"等锁请求"占满的风险；跨机器可复现。

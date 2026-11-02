@@ -764,7 +764,7 @@ def _run_with_heartbeat(coro_factory, beat=0.01):
         out, err = None, ""
         try:
             out = await coro_factory()
-        except Exception as e:              # noqa: BLE001 - 失败分型要照实看
+        except Exception as e:              # 失败分型要照实看，别吞
             err = "{}: {}".format(type(e).__name__, e)
         dur = time.monotonic() - t0
         stop = True
@@ -799,7 +799,7 @@ def test_land_undo_runs_off_event_loop(monkeypatch, tmp_path):
 
 def test_land_commit_runs_off_event_loop(monkeypatch, tmp_path):
     """落地同理：`apply_plan` + 落盘整段都在锁内，锁也不能在事件循环上等。"""
-    db, _store = _land_env(tmp_path, monkeypatch)
+    _land_env(tmp_path, monkeypatch)
     seen = {}
 
     real_apply = api.plan_landing.apply_plan
@@ -826,7 +826,7 @@ def test_land_undo_waiting_on_real_lock_does_not_stall_heartbeat(monkeypatch, tm
       · 只断言"等了"   —— 旧形状也等了，正是它的问题。
     R75 实测同一段业务：旧形状滞后 459ms（≈ 耗时），新形状 6ms。
     """
-    db, _store = _land_env(tmp_path, monkeypatch)
+    _land_env(tmp_path, monkeypatch)
     _land_once()
 
     holder = _hold_reserved(api._DB_PATH)
