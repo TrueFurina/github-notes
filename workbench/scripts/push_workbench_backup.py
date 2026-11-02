@@ -127,6 +127,11 @@ print('workbench/ 下已有 %d 个（将被本地版本更新）' % len(wb_exist
 wb_files={}  # arc -> (mode '100644', sha)
 changed=0; same=0
 for arc, lp in files:
+    if not os.path.isfile(lp):
+        # 运行时数据文件（如 SQLite db）可能在两次备份间被应用删除/重建。
+        # 容错跳过并记录，不中断整次备份。
+        print('  · 跳过（本地已不存在）: %s -> %s' % (arc, lp))
+        continue
     with open(lp,'rb') as fh: data=fh.read()
     sha=blob_sha(data)
     old=wb_existing.get(arc)
