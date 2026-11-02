@@ -1,0 +1,104 @@
+[
+ {
+  "repo": "TencentCloud/Octop",
+  "num": 2731,
+  "state": "open",
+  "merged": false,
+  "head": "2fe9d91346",
+  "branch": "fix/bot-creator-greeting-tls",
+  "base": "develop",
+  "add": 37,
+  "del": 2,
+  "files": 2,
+  "comments": 0,
+  "body_len": 3700,
+  "file_list": [
+   {
+    "name": "src/octop/infra/gateway/bot_creators/feishu_bot_creator.py",
+    "a": 0,
+    "d": 2,
+    "status": "modified"
+   },
+   {
+    "name": "tests/unit/gateway/test_feishu_bot_creator.py",
+    "a": 37,
+    "d": 0,
+    "status": "modified"
+   }
+  ]
+ },
+ {
+  "repo": "TencentCloud/octop-harness",
+  "num": 197,
+  "state": "open",
+  "merged": false,
+  "head": "66873e3bf1",
+  "branch": "fix/acp-close-task-reference",
+  "base": "develop",
+  "add": 66,
+  "del": 3,
+  "files": 2,
+  "comments": 0,
+  "body_len": 2289,
+  "file_list": [
+   {
+    "name": "src/octop_harness/acp/service.py",
+    "a": 18,
+    "d": 3,
+    "status": "modified"
+   },
+   {
+    "name": "tests/test_acp_service.py",
+    "a": 48,
+    "d": 0,
+    "status": "added"
+   }
+  ]
+ },
+ {
+  "repo": "TencentCloud/octop-memory",
+  "num": 30,
+  "state": "open",
+  "merged": false,
+  "head": "03bdbe6997",
+  "branch": "fix/rejected-candidate-dedup",
+  "base": "develop",
+  "add": 40,
+  "del": 13,
+  "files": 5,
+  "comments": 1,
+  "body_len": 2081,
+  "file_list": [
+   {
+    "name": "CHANGELOG.md",
+    "a": 4,
+    "d": 0,
+    "status": "modified"
+   },
+   {
+    "name": "docs/agent/HANDOFF.md",
+    "a": 8,
+    "d": 0,
+    "status": "modified"
+   },
+   {
+    "name": "src/octop_memory/storage/backends/postgres.py",
+    "a": 7,
+    "d": 5,
+    "status": "modified"
+   },
+   {
+    "name": "src/octop_memory/storage/backends/sqlite.py",
+    "a": 9,
+    "d": 7,
+    "status": "modified"
+   },
+   {
+    "name": "tests/test_backend_parity.py",
+    "a": 12,
+    "d": 1,
+    "status": "modified"
+   }
+  ]
+ }
+]
