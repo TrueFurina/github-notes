@@ -1,0 +1,89 @@
+diff --git a/src/agents/voice/utils.py b/src/agents/voice/utils.py
+index 6b39600..6984779 100644
+--- a/src/agents/voice/utils.py
++++ b/src/agents/voice/utils.py
+@@ -1,6 +1,13 @@
+ import re
+ from collections.abc import Callable
+ 
++# A sentence ends after an ASCII . ! ? that is followed by whitespace (so "3.14" and
++# "p.m." stay intact), or after a CJK 。！？ which are normally not followed by
++# whitespace. Matching positions instead of splitting on the separator keeps the
++# original spacing: rejoining the pieces with a space would insert spaces between CJK
++# sentences, which TTS reads as extra pauses.
++_SENTENCE_BOUNDARY_RE = re.compile(r"[.!?](?=\s)|[。！？]")
++
+ 
+ def get_sentence_based_splitter(
+     min_sentence_length: int = 20,
+@@ -26,16 +33,18 @@ def get_sentence_based_splitter(
+         Returns:
+             A tuple of the text to process and the remaining text buffer.
+         """
+-        sentences = re.split(r"(?<=[.!?])\s+", text_buffer.strip())
+-        if len(sentences) >= 1:
+-            combined_sentences = " ".join(sentences[:-1])
++        stripped = text_buffer.strip()
++        boundaries = list(_SENTENCE_BOUNDARY_RE.finditer(stripped))
++        if boundaries:
++            end = boundaries[-1].end()
++            combined_sentences = stripped[:end]
+             if len(combined_sentences) >= min_sentence_length:
+                 # Carry any trailing whitespace over to the remainder. It separates the text
+                 # held back from the next streamed delta, and stripping it concatenates the
+                 # next word onto the last one, so "He " followed by "arrived" is spoken as
+                 # "Hearrived".
+                 trailing_whitespace = text_buffer[len(text_buffer.rstrip()) :]
+-                remaining_text_buffer = sentences[-1] + trailing_whitespace
++                remaining_text_buffer = stripped[end:].lstrip() + trailing_whitespace
+                 return combined_sentences, remaining_text_buffer
+         return "", text_buffer
+ 
+diff --git a/tests/voice/test_utils.py b/tests/voice/test_utils.py
+index 8cb078d..20f0901 100644
+--- a/tests/voice/test_utils.py
++++ b/tests/voice/test_utils.py
+@@ -69,3 +69,43 @@ def test_split_without_trailing_whitespace_is_unchanged() -> None:
+         "This sentence is long enough to flush.",
+         "He",
+     )
++
++
++@pytest.mark.parametrize(
++    "text, expected",
++    [
++        (
++            "今天天气很好，阳光明媚。明天会下雨，记得带伞。我们",
++            ("今天天气很好，阳光明媚。明天会下雨，记得带伞。", "我们"),
++        ),
++        (
++            "今日はとても良い天気です。明日は雨が降るでしょう。傘を",
++            ("今日はとても良い天気です。明日は雨が降るでしょう。", "傘を"),
++        ),
++        (
++            "第一句足够长可以切分了。第二句也足够长可以切分。第三句",
++            ("第一句足够长可以切分了。第二句也足够长可以切分。", "第三句"),
++        ),
++    ],
++    ids=["chinese", "japanese", "no-inserted-spaces"],
++)
++def test_split_cjk_sentences_without_trailing_space(text: str, expected: tuple[str, str]) -> None:
++    """CJK sentences end in 。！？ with no space after them; they must still split.
++
++    The old splitter only matched ``[.!?]`` followed by whitespace, so a Chinese or
++    Japanese reply was never split and TTS waited for the whole reply. The chunks must
++    also keep the original spacing (no space is inserted between CJK sentences).
++    """
++    split = get_sentence_based_splitter(20)
++
++    assert split(text) == expected
++
++
++def test_cjk_streaming_keeps_text_intact_and_adds_no_spaces() -> None:
++    """Streaming CJK text must not lose characters or insert spaces between sentences."""
++    text = "今天天气很好，阳光明媚。明天会下雨，记得带伞。我们出发吧。"
++
++    for chunk_size in (1, 2, 3, 5, 7):
++        spoken = _stream(text, chunk_size, min_sentence_length=10)
++        assert "".join(spoken) == text
++        assert all(" " not in chunk for chunk in spoken)
