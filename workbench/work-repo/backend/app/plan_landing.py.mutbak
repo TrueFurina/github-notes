@@ -224,6 +224,151 @@ def diff_plan(plan_rows: List[dict], entries: List) -> dict:
     }
 
 
+def landing_receipt(diff: dict, landed_at: str = "", actor: str = "") -> str:
+    """落地回执：一句话说清"这次到底改了什么、能不能撤"。pure：只读 diff。
+
+    为什么要这个函数（R60）
+    ----------------------
+    `/parallel/land` 是这条链路里唯一一个**只回 diff 结构、不回人话**的写端点
+    （`/upload`、`/load-default`、`/master/*` 都回 message）。于是前端各自拼文案：
+    有的只显示 `after_entries`，有的干脆不显示。教秘看不到"改了哪些、有没有被
+    截短、能不能撤"，也就无从判断这次落地是不是他要的那一份 —— 与 R-36
+    「写路径的任何不实都必须可见」同一条线。
+
+    措辞口径（每一条都对应一种"看着成功、其实不是"的情形）：
+
+    - **四个账都要念出来**：新增 / 调整 / 未覆盖保留 / 原样保留。只报
+      `after_entries` 时，"410 条"既可能是全新排的，也可能是原封不动又落了一遍。
+    - **`has_changes` 为假必须明说"没有任何变化"**。否则"落地成功"与"落地没生效"
+      在回执上长得一模一样，教秘只能靠刷新页面猜。
+    - **长实验截短单独点名**：这是落地唯一的静默数据变更（原表 2 行 → 方案 1 行）。
+      它只出现在 `warnings` 列表里时等于没说 —— 列表会被人一眼跳过。
+    - **时间与操作人写进回执**：落地是可追责的写操作，"什么时候、谁落的"不该
+      只存在于另一个面板里。
+    """
+    plan_rows = int(diff.get("plan_rows") or 0)
+    plan_units = int(diff.get("plan_units") or 0)
+    added = diff.get("added") or []
+    changed = diff.get("changed") or []
+    uncovered = diff.get("uncovered") or []
+    uncovered_rows = sum(len(u.get("rows") or []) for u in uncovered)
+    unchanged = int(diff.get("unchanged_units") or 0)
+    long_sessions = diff.get("long_sessions") or []
+    warnings = diff.get("warnings") or []
+    before = diff.get("before_entries")
+    after = diff.get("after_entries")
+
+    if diff.get("has_changes"):
+        # 有改动：四个账逐一念。`unchanged_units` 也要念 —— 它回答的是
+        # "有多少单元我压根没碰"，那是教秘核对"是不是少排了"的基数。
+        head = (f"✅ 已落地 {plan_rows} 条方案行（{plan_units} 个单元）："
+                f"新增 {len(added)} 个单元、调整 {len(changed)} 个、"
+                f"未覆盖保留 {len(uncovered)} 个（{uncovered_rows} 行）、"
+                f"原样保留 {unchanged} 个")
+    else:
+        head = (f"✅ 已记录一次落地（{plan_rows} 条方案行 / {plan_units} 个单元），"
+                f"但安排表**没有任何变化**")
+        if unchanged:
+            head += f"：{unchanged} 个单元与现有安排完全一致，无需改动"
+        if uncovered:
+            # 无变化分支同样要报未覆盖：否则"没变化"读起来像"方案覆盖了全部"，
+            # 实际可能是求解只排了一半、另一半原样留在表里。
+            head += (f"；另有 {len(uncovered)} 个单元不在方案里"
+                     f"（{uncovered_rows} 行，原样保留）")
+
+    if before is not None and after is not None:
+        if before == after:
+            head += f"；安排表仍 {after} 条"
+        else:
+            head += f"；安排表 {before} → {after} 条"
+    nonsched = int(diff.get("untouched_nonsched") or 0)
+    if nonsched:
+        # 有它才解释得通"为什么方案只覆盖一部分单元，条数却没少"
+        head += f"（含 {nonsched} 条绪论/考核类不参与排课，原样保留）"
+
+    if long_sessions:
+        names = "、".join(str(ls.get("unit") or "?") for ls in long_sessions[:3])
+        if len(long_sessions) > 3:
+            names += f" 等 {len(long_sessions)} 个单元"
+        head += (f"\n⚠️ {len(long_sessions)} 个单元的长实验会被截短"
+                 f"（原表同一天占多个节次，方案每单元只给一节）：{names}。"
+                 f"请确认，或落地后在教务系统补回第二时段")
+
+    if warnings and not long_sessions:
+        # 长实验已在上一行单独点名，这里只说"还有几条"，细节留在 diff.warnings
+        head += f"\n⚠️ 另有 {len(warnings)} 条提醒（详见响应里的 warnings）"
+    elif warnings and long_sessions and len(warnings) > 1:
+        head += f"\n⚠️ 另有 {len(warnings) - 1} 条提醒（详见响应里的 warnings）"
+
+    if landed_at:
+        when = landed_at.replace("T", " ")[:19]
+        head += f"\n🕒 {when}"
+        head += f"，由 {actor} 落地" if actor else " 落地"
+        head += "；可在「落地历史」里撤销"
+    return head
+
+
+def undo_receipt(out: dict, remaining: Optional[dict] = None) -> str:
+    """撤销回执：一句话说清"撤掉了哪一次、现在处在什么状态"。pure：只读入参。
+
+    为什么要这个函数（R73）
+    ----------------------
+    `/parallel/land` 有 `landing_receipt`（R60），`/parallel/land/undo` 没有对称的
+    回执：成功时只回一堆字段，前端 `doUndo` 自己拼一句话 ——
+
+        ↩️ 已撤销落地，安排表恢复到 2 条
+
+    实测把这句话的**三个缺口**全暴露出来（连续落地两次 A、B，再撤销一次）：
+
+    1. **不说撤的是哪一次**。落地两次之后，教秘要确认的正是"我刚才撤掉的是
+       不是刚才那次"。`landed_at` / `landed_actor` 就在响应里，界面一个都没念。
+    2. **不说撤销之后还剩什么**。撤销只弹一条记录，更早那次落地**仍然生效**：
+       实测撤销后 `GET /parallel/land/status` 依旧 `landed=True`，面板下半部分
+       照旧显示"当前安排表已是落地方案（更早那次的时刻）"。于是同一屏上，
+       横幅说"已撤销落地"、下面说"已是落地方案" —— 两句都真，读起来像 bug。
+       不把"还有更早的一次在生效"写进回执，教秘会以为已经回到原始状态。
+    3. **不说回滚掉的调课要怎么办**。`rolled_back_moves` 只给数字，界面上补了
+       "需重新审批"四个字；但那一句是前端硬编码的，字段一旦改名就静默消失。
+
+    与 R60 同一口径：**写路径的每个"看起来成功"都要人话兜住**，且措辞只描述
+    已发生的事实 —— 有更早落地时绝不写"已回到落地前"。
+    """
+    restored = int(out.get("restored_entries") or 0)
+    moves = int(out.get("rolled_back_moves") or 0)
+    landed_at = (out.get("landed_at") or "").strip()
+    landed_actor = (out.get("landed_actor") or "").strip()
+    revoked_at = (out.get("revoked_at") or "").strip()
+    revoked_by = (out.get("revoked_by") or "").strip()
+
+    when = landed_at.replace("T", " ")[:19]
+    head = f"↩️ 已撤销 {when} 那次落地" if when else "↩️ 已撤销最近一次落地"
+    head += f"，由 {landed_actor} 落地" if landed_actor else "（该记录没有留操作人）"
+
+    if remaining:
+        # 有更早的落地仍在生效：**不能**说"已回到落地前"，那是假的。
+        head += f"；安排表现 {restored} 条 —— 更早那次的落地结果，不是原始状态"
+    else:
+        head += f"；安排表已回到落地前的状态（现 {restored} 条）"
+
+    if moves > 0:
+        # 这是撤销唯一的**静默数据变更**：落地之后审批通过的调课一并退了。
+        head += (f"\n⚠️ 一并回滚了落地后生效的 {moves} 条调课 —— "
+                 f"这些申请需要重新审批，不会自动重放")
+
+    if remaining:
+        r_when = (remaining.get("landed_at") or "").replace("T", " ")[:19]
+        r_actor = (remaining.get("actor") or "").strip()
+        head += "\nℹ️ 更早的一次落地"
+        head += f"（{r_when}" if r_when else "（时刻未记录"
+        head += f"，由 {r_actor} 落地）" if r_actor else "，未记录操作人）"
+        head += "仍然生效：撤销入口还在，要回到更早的状态就再撤一次"
+
+    if revoked_at:
+        head += f"\n🕒 {revoked_at.replace('T', ' ')[:19]}"
+        head += f"，由 {revoked_by} 撤销" if revoked_by else " 撤销"
+    return head
+
+
 # ---------------------------------------------------------------------------
 # 快照（撤销用）
 # ---------------------------------------------------------------------------
@@ -522,7 +667,12 @@ def undo(db, store: LandingStore, actor: str = "") -> dict:
     """
     rec = store.latest()
     if not rec:
-        return {"success": False, "error": "当前没有可撤销的落地方案"}
+        # `error_kind` 是给**端点**看的：404 与 500 必须分开返回。
+        # 只有"根本没有可撤销的记录"才是 404；下面那支（课表已退、标记没写进去）
+        # 是服务端自己没做完，报 404 会让教秘以为什么都没发生，然后重新落地 ——
+        # 把刚退掉的方案又落回去。分型由 tests/test_landing_endpoints.py 钉住。
+        return {"success": False, "error_kind": "no_record",
+                "error": "当前没有可撤销的落地方案"}
     before = json.loads(rec["before_json"])
     # 顺序有意为之：**先**恢复内存、**再**打撤销标记。反过来的话，restore 一旦崩掉，
     # 记录已被标成"已撤销"而课表其实没动 —— 撤销入口消失、什么都没退，那是无法挽回
@@ -537,20 +687,26 @@ def undo(db, store: LandingStore, actor: str = "") -> dict:
     # 所以不能报成功：审计标记本身就是撤销契约的一部分（R55）。
     try:
         mark = store.revoke(rec["id"], actor=actor)
-    except Exception as first:  # noqa: F841
+    except Exception as first:
         try:
             # sqlite 最常见的失败是瞬时锁，重试一次通常就能自愈
             mark = store.revoke(rec["id"], actor=actor)
         except Exception as again:
             return {
                 "success": False,
+                "error_kind": "revoke_failed",
                 "revoked": False,
+                # 这一条是**已发生的事实**，不是错误码的附属：课表真的退了。
+                # 端点据此返回 500（不是 404），界面据此刷新状态。
                 "rolled_back": True,
                 "landed_at": rec["landed_at"],
                 "restored_entries": len(db.entries),
-                "error": ("课表已回滚到落地前，但撤销记录写入失败（%s）。"
+                "error": ("课表已回滚到落地前，但撤销记录写入失败"
+                          # 两次原因都报（R59）：只留重试那次会把"磁盘满"
+                          # 误导成"database is locked"，排障方向整个错。
+                          "（首次：%s；重试：%s）。"
                           "该记录在库里仍为「已落地」，请重试撤销 —— "
-                          "否则重启重放会把这次撤销再应用回来。" % again),
+                          "否则重启重放会把这次撤销再应用回来。" % (first, again)),
             }
     return {
         "success": True,

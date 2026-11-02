@@ -622,3 +622,124 @@ ruff `All checks passed`，与 R55 改后基线 `diff` 空；行尾 CRLF=0 / 185
 - 未跑 pytest、未跑变异、未 push、未删任何文件、未改任何代码或测试。
 
 ---end 值守 18:31---
+
+## R62 · 2026-11-02 · 一键排课可复现 · [第2期]
+
+- 产出：`R62-排课可复现-已验证.md` + `app/engine/solver_factory.py`（53→91 行）+
+  新增 `tests/test_solver_factory_contract.py`（100 行）、`tests/test_solver_determinism.py`（83 行）
+- 修的遗留项：D2 §6 第 7 条「`Solve` 无 `random_seed`，生产侧未修，同数据两次排课**可能**不同」
+  —— 本期报告里唯一一条"测试绕过、生产从未修"的口子。
+
+**先把"可能"变成"是"**（三组取证，数据 `schedule.demo.xlsx` 433 行、20 逻辑核、ortools 9.11.4210）：
+- 小模型 `solve(max_sections=30)` worker=8：第一次三次全同（1/3），隔几分钟同配置再跑
+  **run1 与 run2 差 56 行**（2/3）⇒ **同一配置两次实验结论不同，这本身就是非确定性的定义**。
+- 真实链路 `solve_all(chunk_size=60)`：worker=8 **两次完全不同，288 / 410 行换了位置**；
+  worker=1 **两次完全一致**。两次 `status` 全是 `OPTIMAL`、`solved` 都是 171
+  ⇒ **不是没算完，是同一道题有大量等价最优解，每次挑到不同的那个**。
+- 归因：不是时限（11.07s / 11.44s，时限 7s/片）、不是种子缺省（ortools 默认种子就是 1，
+  补一行 seed 改不了任何东西）、**是 `num_search_workers=8` 的并行搜索 + 工作窃取**。
+
+**改法**：`DEFAULT_MAX_WORKERS` 8 → **1**，`new_solver()` 显式写 `random_seed`；
+新增 `SOLVER_SEED` 覆盖。代价 **1.03x**（11.07s → 11.45s）；60 任务片 4.2s → 4.4s。
+**定性和省内存是同一个方向**（8 worker 峰值 +158MB），不是权衡。
+
+- 测试：契约 9 条（毫秒级，只碰参数）+ 行为 1 条（真实表连排两次，约 23s）。
+  ⚠️ 契约里"种子"一条不能用"读出来是不是 1"断言 —— ortools 默认就是 1，
+  删掉那行也照样绿；改用 `SOLVER_SEED=7` 覆盖证伪。
+- 定向变异三条：V1 默认改回 8 → **3 failed**（契约 2 + **行为用例红**，真实差异 288 行）；
+  V2 删 seed 写入 → `assert 1 == 7` 红；V3 去覆盖分支 → `assert 1 == 4` 红。
+- **自己踩的坑（新，值得记）**：第一版行为用例用「当前 worker != 1 就 skip」当跳过条件
+  ⇒ 把默认值改回 8 时它安静地 skip，**唯一能证明问题的用例自己闭嘴**。
+  V1 跑出 `3 failed / 6 passed / 1 skipped` 才发现。改成只认"显式设了 `SOLVER_WORKERS`"，
+  重跑 **3 failed / 7 passed / 0 skipped**。改的时候还把 `delenv` 写在 `getenv` 前面（skip 永不触发），
+  **同一处错两次，两次都靠"跑一遍看数字"发现，不是靠读代码**。
+- 实测：pytest **768 / 32 / 0**（167.15s，+10：契约 9 + 行为 1）；测试文件 78 → **80**；
+  变异 **56 / 56**（7 批 × 8，日志 56 行，0 SKIP 0 无效）；ruff 两版 0（含 unsafe 0）；三文件纯 LF。
+- 耗时拆清：+23s 是新行为用例；+44s 是单 worker 化在**既有用例**上的代价
+  （101.34s → 145.69s，未加新用例时）。**1.03x 是单次排课的代价，不是整套测试的代价**，别混。
+- 没做：不动 `max_time_in_seconds`（卡住不返回风险更大）；不给 `solve()` 加 seed 参数
+  （改两处签名 + 全部调用点，属扩大改动面）；**没测跨机器可复现**（只本机 20 核，不写"已验证"）。
+- 边界：只保证「同数据 + 同配置 + **未触发时限**」；`FEASIBLE` 截断时仍不确定；
+  `SOLVER_WORKERS=8` 时不可复现是**预期行为**。
+- 推送：commit `20315dabff`（父 `c48bc388bc`），CI **`41442486965` success**，
+  3 job 全绿（8 / 8 / 11 step），**CI 内 768 / 32 / 143.02s**（R61 是 758/32/113.11s，+29.91s）。
+  ⚠️ CI 只慢 26%、本地慢 65% —— GitHub runner 核少，8 worker 在那边本来就吃不饱，
+  **并行收益在 CI 上接近零**，反过来支持「默认单 worker」这个选择。
+
+## 20:20–20:55 · R73：撤销回执（"撤掉的是哪一次、撤销之后还剩什么"）
+
+接 R62。遗留清单里挂着一条 `/parallel/land/undo` 成功路径无 `message`，原以为是文案债。
+
+- **取证**（`R73-new/probe_undo.py`，临时库）：连落 A、B 再撤一次 → undo 200 **无 `message`**；
+  `landed_at` 是 B 的时刻、`rolled_back_moves=1`；随后 `/land/status` **仍 `landed=True`**，
+  指向 A 的时刻；库里 id=2 已撤销、id=1 未撤销。界面只会说
+  "↩️ 已撤销落地，安排表恢复到 2 条；一并回滚了…1 条调课（需重新审批）"。
+  ⇒ 三个缺口：不说撤的是哪一次/谁落的；**不说撤销后还有更早一次在生效**（状态栏照旧写
+  "当前安排表已是落地方案"）；"需重新审批"是前端硬编码。
+- **改法**：`plan_landing.undo_receipt(out, remaining=None)`（pure，与 R60 的 `landing_receipt` 对称）。
+  有更早落地时**禁止**说"已回到落地前"，改说"更早那次的落地结果，不是原始状态"，
+  并补"仍然生效：要回到更早的状态就再撤一次"；`moves==0` 时一个字不提。
+  端点 `land_undo` 在 `_land_lock` **锁内**读 `latest()` 当 `remaining`（锁外会被并发落地插队）；
+  失败两型（R61 的 404/500）一字未动。前端 `doUndo` 改原样透传 `message`，兜底保留旧文案。
+- **测试**：新增 `test_land_undo_receipt.py` 9 条（毫秒级）；`test_landing_endpoints.py` +2
+  （接线 1 条 + "连落两次再撤一次"1 条，后者把回执与 `status` 钉成同一事实的两个说法）；
+  前端 +1（透传且不再出现自拼前缀）。
+- **定向变异 4 条全命中**：V1 分支恒假 → **2 failed/18 passed**；V2 `moves>=0` → 1/19；
+  V3 去操作人分支 → 1/19；V4 端点不挂 message → 2/18。每次复原后核 md5。
+- **全量变异 56/56**（7 批 × 8）。
+- 🔴 **第 8 次仪器教训**：`_r73_mutrun.py` 收尾"复原"复用 `sys.argv` 的 `V1` ⇒ 实际是再打一次
+  变异，文件**留在变异态**；只看 `tail -4` 一行 `ABORT hits=0` 没发现。已改成显式 `restore`
+  + 前后 md5 + `pl_matches_backup` 校验。
+- 🔴 **第 9 次仪器教训**：批量跑时 4 个变异体被判 `无效 · pytest 退出码 1: ?`；手工单跑 M1
+  立刻 `8 failed, 1 passed, 76 deselected`。根因是 pytest 临时目录垃圾 >50 触发本机清理钩子、
+  子进程在打印汇总行前被杀。**每批独立 `TEMP`/`TMP` 后 8/8 恢复**；全量套件同法从
+  `rc=1 无汇总行` 变成 `rc=0、779 passed, 32 skipped, 215.46s`。
+- **实测**：pytest **779/32/0**（811 tests − 32 skipped；+11）、测试文件 80 → **81**、
+  前端 **21 文件/157**、变异 **56/56**、ruff 两版 0、新测试文件纯 LF。
+- **CI**：`2a93cc20ed` → **`41447736891` success**，3 job（8/8/11 step）全绿，
+  CI 内 **779/32/134.63s**（R62 768/32/143.02s）、前端 **21/157**。
+- 文档：`R73-撤销回执-已验证.md`、`D2-汇总-第2期.md` §14、`核验台账.md`、`交付文档目录.md`。
+- 没做：真实 sqlite 锁（重试那一支）仍未用真锁验证；不解释"为什么会有更早的落地"（那是
+  `/land/history` 的事）；跨机器可复现仍未测。
+
+## 21:26–21:50 · R74：撤销的重试在真锁下是什么样（"补条用例"补出了一个 11 秒）
+
+接 R73 遗留：撤销标记写失败后的"重试一次"，从 R45 起只有 monkeypatch 用例
+（注入 `RuntimeError`），真 sqlite 一次都没跑过。
+
+- **取证一**（`R74-new/probe_lock.py`，另一条连接 `BEGIN IMMEDIATE` 持锁，生产连接 5s）：
+  正常撤销 0.008s；持锁期间 `latest()` 仍可读（0.001s，只读不受 RESERVED 影响）；
+  单次 `revoke` **5.50s 后抛 `sqlite3.OperationalError: database is locked`**；
+  一次 `undo` **11.04s**、`success=False`、`rolled_back=True`、error 里 sqlite 原话出现 **2 次**；
+  释放锁后再撤 0.017s 成功。
+- **取证二**（`R74-new/probe_loop.py`，50ms 心跳）：A 不持锁 13ms 滞后 / B 真锁+同步 **11076ms** /
+  C 真锁+`to_thread` 14ms（184 拍，耗时同样是 11.08s）。B 就是 `land_undo` 的形状
+  （`async def` 里 `with _land_lock:` 同步调 `undo`，而 `_land_lock` 是 `threading.Lock`）。
+- **三个发现**：① "重试一次通常就能自愈"基本是错的 —— sqlite 自带 5s busy_timeout，
+  锁在 5s 内消失根本进不了 except，能进去的锁已经撑过 5s，两次尝试背靠背无间隔、
+  锁不会在微秒级窗口消失，重试只把 5.5s 变成 11s（自愈的是 busy handler，不是那个 try）；
+  ② 一次被锁的撤销 = **整个事件循环停摆 11.08s**；
+  ③ 抓事件循环阻塞的 CI 门看不见这一型 —— `audit_async_blocking.HEAVY` 刻意排除
+  `sqlite execute`，理由是"单条 insert <1ms"，而这个前提在**锁竞争**下不成立
+  （同一条 UPDATE：0.4ms → 5.5s）。
+- **改了什么**：**只有测试**。`test_land_undo_atomicity.py` 226 → **411 行、+3 条真锁用例**
+  （真锁下 `revoke_failed` + 两条 sqlite 原话 + 两次尝试都在等锁；锁释放后重试真的成功；
+  短锁被 busy handler 吸收、根本不进 except）。`_ShortBusyStore` 只把 busy timeout 5s→0.15s，
+  **只改等待时长不改被测分支**，否则一条用例白等 11s。
+- **为什么不顺手改成线程池**：probe C 已证明有效，但 `undo` 会改 `_db.entries`，
+  跨线程改/读要先定并发契约；且仓库里 async 测试基建为 0（无 `AsyncClient`/`ASGITransport`/`asyncio_mode`），
+  写"并发请求不被拖住"的用例得先补一层 —— 留给下一轮，写进 §6。
+- **定向变异 4/4**：V1 `error_kind` 归错型 → 1 red；V2 丢 `rolled_back` → 1 red；
+  **V3 `except Exception`→`except RuntimeError` → 2 red（两条真锁用例报裸 OperationalError，
+  四条 monkeypatch 用例全绿）** —— 这就是"旧用例对这类退化完全失明"的实证；
+  V4 文案只留重试 → 2 red（真锁用例 + R59 那条）。
+- 🔴 **仪器教训第 10 次（并推翻 R73 的归因）**：全量变异大批"无效·退出码 1: ?"。
+  抓到原文 `[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":50,"threshold":50,"scope":"turn"}`
+  —— 宿主**每轮最多 50 次删除**，而 `mutation_check.py` 每条变异后都 `os.remove(.mutbak)`，
+  第 50 条之后子进程被带走。R73 写成"临时目录垃圾 >50"是**误判**（当时每批 8 次删除，
+  远低于 50，所以换独立 TEMP"恰好"恢复了）。本轮改成**零删除**（备份一文件一份、原地覆写）
+  + **判定读 junit 文件**（pytest 在 sessionfinish 先于终端汇总写盘）⇒ 56 条全跑通。
+- **实测**：pytest **782/32/0**（814 tests，207.67 s）、测试文件 81（只追加不新增）、
+  前端 21/157（未动）、全量变异 **56/56**（0 存活/0 无效）、ruff 两版 0、目标文件纯 LF 411 行。
+- 文档：`R74-真锁撤销-已验证.md`、`D2-汇总-第2期.md` §15、`核验台账.md`、`交付文档目录.md`。
+- 没做：线程池包装、重试退避、审计脚本补"锁等待不可见"的限制说明、端点层真锁用例（会白等 22s）。
