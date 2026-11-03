@@ -41,6 +41,10 @@ git -C D:/github/_notes pull --ff-only
 ## 3. 收工前（强制，否则视为未完成）
 
 ```bash
+# 3.0 守门（提交前强制；已装入 .git/hooks/pre-commit，commit 会自动跑）
+#     机器重置后重装钩子：cp workbench/tools/pre-commit.hook .git/hooks/pre-commit
+python D:/github/_notes/workbench/tools/session_guard.py
+
 # 3.1 体检 + 漂移检测（你已有的工具，现在变成"必须跑"）
 python D:/github/_notes/workbench/tools/workspace_map.py
 python D:/github/_notes/workbench/tools/check_multi_version.py

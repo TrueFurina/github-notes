@@ -1,0 +1,6 @@
+#!/bin/sh
+# 收工守门：提交 github-notes 前强制跑 session_guard
+# 重置机器后重装：
+#   cp workbench/tools/pre-commit.hook .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
+exec python "D:/github/_notes/workbench/tools/session_guard.py"
