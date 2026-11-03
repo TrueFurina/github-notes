@@ -23,8 +23,8 @@
 ## 1. 开工前（每会话）
 
 ```bash
-# 1.1 领一个会话命名空间，所有临时产物放这里，绝不在根目录新建 _xxx
-mkdir -p D:/github/sessions/$SESSION_ID
+# 1.1 领一个会话命名空间（建 sessions/$ID、拉最新真源、跑守门确认干净起点）
+python D:/github/_notes/workbench/tools/session_start.py $SESSION_ID
 
 # 1.2 把真源拉到最新（防重置：本机随时没，远端才是真相）
 git -C D:/github/_notes pull --ff-only
