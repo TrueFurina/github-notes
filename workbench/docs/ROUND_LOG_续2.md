@@ -847,3 +847,92 @@ ruff `All checks passed`，与 R55 改后基线 `diff` 空；行尾 CRLF=0 / 185
 - 没做：`reschedule.py` 仍有 3311 行（主数据 CRUD / 导出 / 工单 / 聊天四块未拆）；
   `_landings` / `_land_lock` / `_DB_PATH` 仍住在 reschedule（抽 `app/state.py` 是另一轮）；
   端点层真锁 HTTP 用例；线程池 40 token 被"等锁请求"占满的风险；跨机器可复现。
+
+## 23:05–23:45 · R77：把主数据一族搬出 reschedule.py（三道门在搬家时静默缩小，两道还是绿的）
+
+- **搬了什么**：`reschedule.py` 3311 → **2998 行**，新建 `app/api/master.py` **399 行**
+  （335 行原文 + 64 行模块头）。15 条 `/master/**` 路由 + 5 个请求体模型
+  （`_CourseIn`/`_ExperimentIn`/`_TeacherIn`/`_RoomIn`/`_ClassIn`）。openapi 路径与方法一字未变。
+- **没搬**：`/master/tasks`、`/master-status`（与 `/upload-master` 是一条链，操作的是
+  "本次导入清单"这份内存态）；`/export/master-workbook` + `_master_workbook_bytes/build`
+  （属于导出族：字节缓存 + 线程池 + `export_gate` + 限流）。
+- 搬迁沿用 R76 四条：路径/方法/dependencies 不动；函数体与注释原文照搬；状态写
+  `_api._xxx`（每次现取）；`reschedule.__getattr__` 惰性转发旧名，**测试零改动**。
+- 🔴 **本轮最值钱的发现不是搬迁，是三道门**：
+  1. `test_api_auth.py::test_all_upload_endpoints_use_limited_reader` **真红了一次** ——
+     5 个上传端点搬走 3 个，`inspect.getsource(reschedule)` 数出来 2。红得对，但根因是
+     判据写死了一个文件。改成按 `app/api/*.py` 目录发现 + 逐端点（形参带 `file` 的
+     async 端点必须调受限读取）+ 断言"找到的上传端点 ≥ 5"。
+  2. `test_apply_match.py::test_every_data_reading_route_self_heals` **不红，静默失守** ——
+     它也只读 `reschedule.py`，搬走的 15 个端点不再受"必须自愈"约束，用例仍绿。
+     改成扫所有含 `APIRouter(` 的模块（模块数由目录自己数，断言 ≥ 3）。
+  3. `scripts/audit_async_blocking.py` —— R76 的修法是"CI 里多写一行 run"，R77 又搬出
+     一个模块，**这正是"要记得加第三行"会失效的时刻**。改成"不给参数 = 扫整个
+     `backend/app/api/`"，CI 只剩一行。
+- 🔁 **自我推翻（R76 的结论）**：R76 写"基线是按单文件攒的，跨文件比会得到假的
+  '消除 N 个'"。看代码就知道基线键是 `f"{路由路径}  {函数名}"`（`_label`），路径全局唯一，
+  **基线本来就能跨文件共用**。混合扫描实测输出「扫描 5 个文件 / 共 53 个路由 /
+  ✅ 零 await 轻查询与基线一致（8 个）」—— 不是"消除了 8 个"。
+- 🔴 **变异清单的锚点已经失配了 3 条**：M38 / M47 / M54。其中 M54 连原文片段都变了
+  （`len(_master_tasks)` → `len(_api._master_tasks)`）。失配的表现是跑批时"**跳过**"，
+  而变异跑批不在 CI 里 —— 等于这三条防护在这段时间没人守。本轮修好 3 条锚点，并加
+  `test_every_mutation_anchor_still_matches_its_file`（56 次字符串计数，0.02 s），
+  锚点一失配每次 pytest 都红。
+- **新增 11 条守卫**（`tests/test_master_module_split.py`，326 行）：路由归属（15 条）/
+  旧模块只许留 `/master/tasks`、`/master-status` 两个已知例外 / openapi 不变 /
+  无同名残留（`vars()` 区分"真定义"与"能取到"）/ 旧名转发 / 全 api 模块禁值绑定（AST）/
+  写端点必须挂 `_api._master_write` 且禁 `threading` / 状态是同一对象 /
+  审计门真跑一次并检查输出里有 master.py / 目录里每个路由模块都出现在输出里 /
+  变异锚点全命中。
+- **定向变异 7/7**：V1 值绑定、V2 自造锁、V3 摘掉 `_master_write`、V4 审计门退回单文件、
+  V5 M54 锚点回旧文件、V6 不转发旧名、V7 旧模块留第二份路由。每条都要求**期望的那条
+  用例**进 junit 失败清单；复原后 md5 与 `.bak` 逐字节一致（`master.py` a536a6a312、
+  `reschedule.py` 9374f90146、审计脚本 82ab667ff2、`mutation_check.py` e66aeaed10）。
+- 🟡 **第 15 条仪器教训（行尾）**：V6 首跑报"锚点命中 0 次"。`reschedule.py` 是 CRLF，
+  其余是 LF，而执行器把锚点统一写成 `\n`。**"锚点失效"和"守卫不灵敏"长得一模一样**，
+  极容易误判。修法：按目标文件自己的行尾展开锚点。修完立刻 1 failed / 11。
+- **M39 又是那条**：全量变异 `参与 55 | 检出 55 | 无效/跳过 1`（M39 无 junit、子进程被杀），
+  按索引单跑立刻 `1 failed / 9 passed`。口径仍是 **55 一次 + 1 重跑**。
+- **实测**：pytest **808/32/0**（840 tests，199.05 s）、测试文件 **83**、前端 21/157、
+  ruff 0、审计门 5 文件/53 路由 exit 0、全量变异 56/56、定向变异 7/7。
+  README 四处数字 829 → **840**（容差守卫会撞，顺手改）。
+- 没做：`reschedule.py` 仍 2998 行（导出族、工单、聊天、上传、主数据初始化在这里）；
+  `_master_data`/`_master_lock`/`_db`/`_DB_PATH` 仍住在 reschedule；审计脚本仍看不见
+  "等锁"；端点层真锁 HTTP 用例；线程池 40 token 占满风险；跨机器可复现。
+- **CI**：`eb49d65f62` → **`41471970323` success**（3 job / 27 step 全绿），CI 内 **808 passed / 32 skipped / 107.10 s**、`import smoke 52 endpoints`、ruff 0；审计门**只有一行命令**，输出「扫描 5 个文件：__init__.py, landing.py, master.py, reschedule.py, xlsx_helpers.py」→ 共 53 个路由 / ✅ 与基线一致（8 个）。这一步本身就是证据：新模块是被**自动**扫进去的，CI 里没有第三行 `run`。
+- 下一刀建议：导出族整块搬，正好复验本轮这三道门会不会**自动**覆盖新模块。
+
+## R78（2026-11-03）导出族整块搬进 `app/api/export.py`
+
+- **做了什么**：把 6 条导出路由 + 2 个请求体 + 字节缓存（6 个符号）+ 预热（3 个符号）
+  + 10 个 `_*_bytes`/`_*_build` 成对同步主体，整块从 `reschedule.py` 搬到新模块。
+  `reschedule.py` **2998 → 2518 行**，`export.py` **567 行**；openapi 路径/方法/dependencies
+  逐条未变，旧名经 `__getattr__` 惰性转发，既有调用点零改动。
+- **没搬**：`/requests/export`。它是 SQLite 工单的投影（不读排课表、不走这份缓存，
+  建表实测 5–30ms），属于工单族；守卫里有一行专门钉住它**不许**被搬过去。
+- **为什么必须整块搬**：只搬一半会留下**两份 `_EXPORT_CACHE`** —— 功能全对、
+  缓存用例全绿，只有命中率腰斩（每份内部自洽）。这条按 `is` 判，不按"内容相等"。
+- 🟡 **两个既有守卫在搬家时红了（这次红得对）**：`test_export_nonblocking.py` 3 条 +
+  `test_export_cache.py` 1 条，都是因为探针打在 `reschedule` 上而端点已不查那个名字 ——
+  桩打空。修法统一成 **桩打在端点自己的模块上**（`sys.modules[endpoint.__module__]`），
+  以后端点再搬，探针跟着走。对比 R77：那次自愈守卫是**绿着失明**，这次至少红了。
+- 🟡 **第 16 条仪器教训（前置断言余量）**：全量跑到第 800 条时，
+  `test_land_undo_waiting_on_write_lock_does_not_stall_heartbeat` 报
+  `dur=0.297 < 0.3`。归因不是锁退化（单跑连过 3 次、每次 1.44s），而是
+  `threading.Timer(0.35)` 在 `_run_with_heartbeat` **之前**起跑，`asyncio.run` 的启动
+  开销把 50ms 余量吃掉了（全量负载下实测走掉 53ms）。修法：持锁 0.35s→**0.6s**、
+  断言 0.3s→**0.45s**。仍然只有"真等过"才可能过。
+- **审计门自动覆盖新模块**（R77 那处改造的复验）：CI 一行没改，输出变成
+  「扫描 **6 个文件**：__init__.py, export.py, landing.py, master.py, reschedule.py,
+  xlsx_helpers.py」→ 53 路由 / 零 await **8 个**（与基线一致）。`parallel_export` 换了文件，
+  基线**仍然是 8 个** —— 这是"基线键是路由路径+函数名、可跨文件共用"的硬证据。
+- **实测**：pytest **819/32/0**（**851** tests，206.82 s）、测试文件 **84**、前端 21/157、
+  ruff 0、审计门 6 文件 exit 0、定向变异 **6/6**、全量变异 **56/56**
+  （口径照实说：**55 条一次通过 + M39 重跑**，首跑"子进程被杀、无 junit"）。
+  README 四处数字 840 → **851**。
+- **CI**：`2ce4d920a8` → **`41657764037` success**（backend / coverage / frontend 三个 job 全绿）。
+- 没做：`reschedule.py` 仍 2518 行（统计/体检、工单、聊天、上传、主数据初始化）；
+  `_landings`/`_land_lock`/`_DB_PATH` 仍住在 reschedule；`app/api/*.mutbak`（2 个，
+  R76/R77 跑批留下的 debris，按零删除禁令未清理，也不在 git 里）。
+- 下一刀建议：统计/体检族（`data_audit` / `stats` / `schedule_grid` / `impact_analysis`），
+  纯读、无状态、无缓存。
