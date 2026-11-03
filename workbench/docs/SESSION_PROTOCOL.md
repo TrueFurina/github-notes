@@ -18,7 +18,7 @@
   - 报告/方案 → `_notes/workbench/docs/`
   - 每日记忆/账本 → `_notes/memory/`
   - 上游 PR 补丁 → `_notes/patches/`
-  - 复用工具 → `_notes/workbench/tools/`（与 `workspace_map.py`、`check_dual_sync.py` 同列）
+  - 复用工具 → `_notes/workbench/tools/`（与 `workspace_map.py`、`check_dual_sync.py`、`close_out.py` 同列）
 
 ## 1. 开工前（每会话）
 
@@ -41,19 +41,19 @@ git -C D:/github/_notes pull --ff-only
 ## 3. 收工前（强制，否则视为未完成）
 
 ```bash
-# 3.0 守门（提交前强制；已装入 .git/hooks/pre-commit，commit 会自动跑）
+# 3.0 统一收工报告：守门（阻断）+ 去重 + 体检 + 代码层漂移（均提示）
 #     机器重置后重装钩子：cp workbench/tools/pre-commit.hook .git/hooks/pre-commit
-python D:/github/_notes/workbench/tools/session_guard.py
+python D:/github/_notes/workbench/tools/close_out.py
 
-# 3.1 体检 + 漂移检测（你已有的工具，现在变成"必须跑"）
-python D:/github/_notes/workbench/tools/workspace_map.py
-python D:/github/_notes/workbench/tools/check_multi_version.py
-
+# 3.1 守门也接在 pre-commit 钩子里，commit 会自动跑（双保险）
 # 3.2 真源推远端（防重置预案的核心动作）
 git -C D:/github/_notes add -A && git -C D:/github/_notes commit -m "..." && git -C D:/github/_notes push
 ```
 
+`close_out.py` 内部依次跑：`session_guard`（阻断）/ `dedupe_scan`（可回收估算）/ `workspace_map`（缺陷分布）/ `check_dual_sync` + `check_multi_version`（代码层漂移，仅提示）。**除守门外均不阻断、均不删除任何文件。**
+
 判据：
+- `session_guard` 必须通过（唯一阻断项）；
 - `workspace_map.py` 不得报"活跃目录里的缺陷版"；
 - `check_multi_version.py` 不得报**新出现的**分叉（既有的已在 `ALLOW_DIVERGE` 登记）；
 - 根目录不得出现**未登记**的 `_xxx` 新目录或新笔记叉。
