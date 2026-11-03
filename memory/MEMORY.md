@@ -24,7 +24,10 @@
 - ★ **`max(lo, min(hi, x))` 不是 NaN-safe**：`min`/`max` 对 NaN 比较恒 False → NaN 被保留在**上界**。marl-ecdsa 的激励链路因此让「奖励算崩的智能体」拿满分（`8ba090c`）。找法：搜同时出现 `min(` 和 `max(` 的行，逐个看是不是钳位；钳位函数必须显式判 `math.isfinite`。
 - ★ **累加器/账本写入必须拒收非有限值**：`x += NaN` 之后恒为 NaN，**永久中毒且无任何报错**。这类「不可恢复的静默污染」比崩溃更危险，写入边界要 fail-closed。
 - ★ **先跑作者留的 `__main__` 自测**：日志第一行自相矛盾往往就是 bug（marl-ecdsa failover 的「Normal consensus」轮立刻打出 `View change: primary_timeout`）。比读代码快得多。
+- ★ **电报里的「自报 ID」永远不可信做安全判定**：去重/防重放/缓存键若直接用报文自带的 id（如 `msg_id`/`request_id`），攻击者可随意填唯一值绕过整个缓存（marl-ecdsa P2-13：`get_msg_id` 读自报值 → 伪造 msg_id 绕 `_seen_msg_ids` 去重）。修复=从内容重算指纹。隐藏坑：`f"{Enum.X}"` 取 repr（"MessageType.X"）但 JSON 编解码后变值（"x"）→ 发送端/接收端重算键不一致，必须枚举归一为值 + 加「线上 encode→decode」回归锁。
 - ★ **假阳性规律**：每次「发现 bug」先问「是不是我 oracle 写错了」（mahjong 三次、croniter 四次都如此）。
+- ★ **强制质量门上的误报比漏报更糟**：兜底正则 `\b\d{8,}\b` 把正文里任意 8+ 位数字（日期/时间戳/手机号/人数）当成引用 → 误报「幻觉引用」卡掉合格指南（comment-distillery `verify_citations` 实测）。修复=删裸长数字兜底，只留 `c\d{6,}`；强制引用本就是结构化 `[源:ID]` 标记（纯数字 ID 走主正则仍捕获）。与 verify_numbers 的「宁可漏报不可误报」哲学一致。
+- ★ **机验脚本对语料列有隐含契约**：`verify_numbers.load_scores_direct → prep.load_records` 必须有 content 列才能产出记录；缺 content 列会静默返回 0 记录 → `collect` 直接 `checked:0`（不是 bug，是测试语料构造错了）。审计机验类脚本时，先确认测试语料带齐 `id/content/score` 列。
 - **判重三条件**：同文件 + 同函数 + 同语义；且必须 diff 补丁，看标题/issue 号会误判。
 - **「不硬凑」原则**：红海里撞车或需设计决策的 bug 一律放弃，宁可不发第 N 个 PR。已验证的落地流水线见 `github-notes/上游贡献落地流水线-2026-11-01.md`。
 
