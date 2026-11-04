@@ -46,6 +46,7 @@
 - ★ **判重三连**：issue 列表 + open PR + **closed PR / issue timeline**。Box 证明「open PR 少」≠「没人做过」；babel 证明「issue 漂亮」≠「没被抢」。
 - ★ **fuzz 的价值是证明清白，不是拿来开 PR**：tinycss2 `url(\1)` 的往返破坏在 HEAD 上确实可复现（真 bug），但属无真实场景的边角，PR #79 被明确拒绝，本轮按「不硬凑」不去重提。`serialize_nth` 穷举 a,b∈[-6,6] 共 169/169 通过 = 干净负结果，记录不提交。
 - **成功要素回看**：3 个 merged + ludic #151 全部来自「读源码做安全/正确性审计 + 有真实用户影响的 bug」；本轮所有「扫 issue」尝试全撞红海 → **下一轮优先源码审计路线，而非扫 issue**。详见 `github-notes/workbench/docs/选靶实证-三个假靶与新硬标准-2026-11-04.md`。
+- ★ **第四类假靶：maintainer 只接受特定类型修复（11-04 `tkem/cachetools`）**：三信号全绿（★2792、openPR=1、活跃、有 merged 外部 PR），但 maintainer 关 #425「NaN 输入校验」时原话「*I don't think we should explicitly guard against each and every potential input-error*」，而 #440「插入失败留下不可用条目」回「Nice catch… Fixed and merged」→ **拒「用户输入错误」类、收「库自身状态损坏」类**。选靶必须读 PR/issue 的**关闭评论**判断 maintainer 口味，与拥挤度/政策/可复现并列。附带实证：#426 的 NaN 修复只改 `Cache.maxsize`/`getsizeof`、没碰 `TTLCache.ttl`（同构参数，`timer() < expires` 对 NaN 恒 False → 条目永不过期），但属被拒类型，不去提。
 
 ## AI/agent 生态选靶实测（2026-11-02）
 - open PR：agno 989、livekit 635、browser-use 439、pipecat 371、llm 356…（全部 >100）→ **AI 生态比通用库更红海**。
