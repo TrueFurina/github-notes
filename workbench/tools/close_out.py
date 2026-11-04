@@ -13,7 +13,8 @@
   2. dedupe_scan      ：可回收空间估算（只读）
   3. workspace_map    ：已知缺陷分布
   4. check_dual_sync + check_multi_version：代码层漂移（审计项目专用）
-  5. G5 work-repo 推送守门**就绪**检查：确认基线快照存在、提示必带 --guard-from
+  5. check_cross_repo_fix：跨仓同源修复传播核查（只读清单，含 clone 过期警示）
+  6. G5 work-repo 推送守门**就绪**检查：确认基线快照存在、提示必带 --guard-from
 
 设计原则（来自 check_dual_sync/check_multi_version 自己的教训，以及 R58 事故）：
   · **仅 notes 守门可阻断收工**——否则会变成"永久红灯的守卫被关掉"。
@@ -39,6 +40,7 @@ DEDUPE = HERE / "dedupe_scan.py"
 WSMAP = HERE / "workspace_map.py"
 DUAL = HERE / "check_dual_sync.py"
 MULTI = HERE / "check_multi_version.py"
+CROSSFIX = HERE / "check_cross_repo_fix.py"
 
 SEP = "=" * 64
 
@@ -109,8 +111,9 @@ def main() -> int:
     # 4) 代码层漂移守卫（审计项目专用；目录缺失会自动跳过返回 0）
     run("代码层·双仓同步守卫（audit-xihu-git / audit-sam）", DUAL, blocking=False)
     run("代码层·多版本漂移守卫（ctf_agent 副本组）", MULTI, blocking=False)
+    run("跨仓同源修复传播核查（只读清单）", CROSSFIX, blocking=False)
 
-    # 5) 通道 B 的守门就绪检查（不推送、不改动 gh_push.py）
+    # 6) 通道 B 的守门就绪检查（不推送、不改动 gh_push.py）
     check_workrepo_guard()
 
     print(f"\n{SEP}")

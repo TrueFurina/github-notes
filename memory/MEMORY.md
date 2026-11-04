@@ -26,7 +26,8 @@
 - ★ **累加器/账本写入必须拒收非有限值**：`x += NaN` 之后恒为 NaN，**永久中毒且无任何报错**。这类「不可恢复的静默污染」比崩溃更危险，写入边界要 fail-closed。
 - ★ **先跑作者留的 `__main__` 自测**：日志第一行自相矛盾往往就是 bug（marl-ecdsa failover 的「Normal consensus」轮立刻打出 `View change: primary_timeout`）。比读代码快得多。
 - ★ **电报里的「自报 ID」永远不可信做安全判定**：去重/防重放/缓存键若直接用报文自带的 id（如 `msg_id`/`request_id`），攻击者可随意填唯一值绕过整个缓存（marl-ecdsa P2-13：`get_msg_id` 读自报值 → 伪造 msg_id 绕 `_seen_msg_ids` 去重）。修复=从内容重算指纹。隐藏坑：`f"{Enum.X}"` 取 repr（"MessageType.X"）但 JSON 编解码后变值（"x"）→ 发送端/接收端重算键不一致，必须枚举归一为值 + 加「线上 encode→decode」回归锁。
-- ★ **假阳性规律**：每次「发现 bug」先问「是不是我 oracle 写错了」（mahjong 三次、croniter 四次都如此）。
+- ★ **假阳性规律**：每次「发现 bug」先问「是不是我 oracle 写错了」（mahjong 三次、croniter 四次都如此）。11-04 跨仓扫描一轮踩了三次：①全文 grep `build_message`/`agent_id` 15 份全命中但语义强度分三档 → 判据必须落在**目标函数体内用 AST**；②`_payload_equivalent`（`json.loads(a)==json.loads(b)` 字典相等、只放宽数值写法）不是放行旁路，别误报 REVIEW；③写成 `".value" in seg` 找 `getattr(mt,"value",mt)` 恒 False → 字符串判据要用 AST 结构。
+- ★ **跨仓扫描的三类非风险命中**（工具 `workbench/tools/check_cross_repo_fix.py`）：①`scan_out`/`*-main/` 只读快照里的缺陷版**是预期**（保留修复前状态以资复查，R110/R111）；②带 `.git` 的活跃目录可能过期——11-04 本地 `marl-ecdsa/message_protocol.py` 判 PARTIAL（msg_type 未归一），远端 main 已 `getattr(mt,"value",mt)` 归一，实测两个真源远端都 FIXED；③只有先 GET 远端原文核验后，本地命中才算真漏洞。**「修复未传播」的判定对象必须是远端真源，不是本地副本。**
 - ★ **强制质量门上的误报比漏报更糟**：兜底正则 `\b\d{8,}\b` 把正文里任意 8+ 位数字（日期/时间戳/手机号/人数）当成引用 → 误报「幻觉引用」卡掉合格指南（comment-distillery `verify_citations` 实测）。修复=删裸长数字兜底，只留 `c\d{6,}`；强制引用本就是结构化 `[源:ID]` 标记（纯数字 ID 走主正则仍捕获）。与 verify_numbers 的「宁可漏报不可误报」哲学一致。
 - ★ **机验脚本对语料列有隐含契约**：`verify_numbers.load_scores_direct → prep.load_records` 必须有 content 列才能产出记录；缺 content 列会静默返回 0 记录 → `collect` 直接 `checked:0`（不是 bug，是测试语料构造错了）。审计机验类脚本时，先确认测试语料带齐 `id/content/score` 列。
 - **判重三条件**：同文件 + 同函数 + 同语义；且必须 diff 补丁，看标题/issue 号会误判。
@@ -49,6 +50,7 @@
 
 ## 环境事实（每次新会话必读）
 - ★ **本地 clone 一律视为过期**：改文件前先 GET 远端原文 → 套精确替换 → 断言 `count==1` → 再推。断言炸了就说明版本差（11-02 差点把远端 201 项测试的文档写回 191）。
+- ★ **会话注入的工作记忆同样是过期快照**：11-04 实证——注入给我的 MEMORY.md 仍写「6 PR 全 open」，磁盘真源已被另一会话更新为「3 merged / 1 判重关闭 / 2 open 等 CI」。做决策前先读磁盘 `.workbuddy-ai/memory/` 或 `_notes/memory/`，别信注入快照。与「本地 clone 过期」同类，但作用域是记忆而非 clone。
 - ★ `codeload` tar.gz 有 CDN 缓存，刚推完下载会拿到旧文件；核验最新内容走 Contents API。
 - `git` 现已可用（`/mingw64/bin/git`，github.com:443 握手失败已消失）——走标准 fork→clone→push→POST /pulls。
 - `_sdk_env`：`D:/github/_sdk_env/Scripts/python.exe`（3.12 venv；无 uv/mypy/cargo；ruff 已装）。
