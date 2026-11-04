@@ -53,6 +53,7 @@
 - `git` 现已可用（`/mingw64/bin/git`，github.com:443 握手失败已消失）——走标准 fork→clone→push→POST /pulls。
 - `_sdk_env`：`D:/github/_sdk_env/Scripts/python.exe`（3.12 venv；无 uv/mypy/cargo；ruff 已装）。
 - 克隆免 git：`curl -sL -o x.tgz https://codeload.github.com/<owner>/<repo>/tar.gz/refs/heads/<branch>`。
+- ★ `git fetch/push` 撞 `CONNECT tunnel failed, response 502` / `Empty reply from server`（代理对 HTTP/2 CONNECT 隧道处理有问题）→ 加 `-c http.version=HTTP/1.1` 可通（11-04 实测：普通 fetch 连败 5 次、`git -c http.version=HTTP/1.1 fetch origin` 一次成功）。「多试几次就能恢复」的判断不完整。仍不通 → REST Contents API PUT 兜底（api.github.com 与 github.com 走不同路由，git 全挂时 API 正常）；API 推送后本地 `fetch` + `rebase origin/main`，git 自动 `dropping ... patch contents already upstream`（零丢失）→ 本地==远端。
 - API 429 → 重试 + 退避 + URL 中文路径 `urllib.parse.quote`。后台任务跨调用会被回收，长跑前台分批。
 - 后台 pytest 临时目录可能触发沙箱 safe-delete 卡住 → 用 `--basetemp` 指到工作区内目录拿干净计数。
 
