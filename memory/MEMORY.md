@@ -44,7 +44,8 @@
 
 ## AI/agent 生态选靶实测（2026-11-02）
 - open PR：agno 989、livekit 635、browser-use 439、pipecat 371、llm 356…（全部 >100）→ **AI 生态比通用库更红海**。
-- **反直觉**：唯一低 PR 的 openai-agents-python（8 个）是因其 CONTRIBUTING **拒绝非 collaborator 的 PR**。→ **低 open-PR 数是「关闭贡献」信号，不是机会。**
+- **反直觉**：唯一低 PR 的 openai-agents-python（8 个）是因其 CONTRIBUTING **拒绝非 collaborator 的 PR**。→ 低 open-PR 数**常**是「关闭贡献」信号，不是机会。
+- ★ **但这是统计倾向，不是铁律（11-04 更正）**：`miguelgrinberg/python-socketio`（0 PR）CONTRIBUTING 明写 "does not accept unsolicited pull requests"；而 `getludic/ludic`（**0 PR**、★895、纯 Python、当日活跃）CONTRIBUTING **明确欢迎外部 PR 且无需先指派** → 另一会话当日开出 PR #151。**决定性变量是 CONTRIBUTING 原文，不是 PR 数**。选靶三信号缺一不可：openPR 低 + 明确接受外部 PR + 纯逻辑可离线复现。低 PR 只是「值得去读政策」的提示，读完成立才叫机会。
 - 政策门槛：python-sdk 需先被指派 issue；graphiti 要 rfc-approved+AI 披露+14 天关闭。
 - **选靶硬标准**：先读 CONTRIBUTING 确认接受外部 PR/无需先指派（与低拥挤同等重要）。
 - 已发：openai-agents-python #5475（CJK 分句器）修复+测试，补丁 `D:/github/_patch_oaa_5475.diff`；因拒外部 PR，只发 issue root-cause 分析（政策欢迎）。
