@@ -76,6 +76,23 @@ git -C D:/github/_notes add -A && git -C D:/github/_notes commit -m "..." && git
 - 通道 A 的 `pre-commit` 钩子同理：本机随时重置，钩子要从仓库内副本重装
   （`cp workbench/tools/pre-commit.hook .git/hooks/pre-commit`）。
 
+**设计决策（2026-11-04，已拍板）：G5 刻意停在「就绪检查」，不升级为「真校验」。**
+
+真校验 = 收工闸联网读远端 `base_commit`、逐文件比对 `work-repo.base` 与远端内容。
+明确**不做**，理由：
+
+1. **会把收工闸变成网络依赖**：本机 `github.com` 偶发 `schannel` 握手失败 / 代理
+   `CONNECT tunnel 502`（11-04 实测）。网络一抖，一个纯本地的收工检查就会误报失败
+   —— 而"永久红灯的守卫会被关掉"（§3 的设计原则）。
+2. **与 `gh_push.py::_guard()` 语义重叠**：等于把推送期校验前移，两套实现各自演化，
+   未来最容易出现"一边改了一边没改"的口径分叉（本项目已被这类问题坑过多次）。
+3. 就绪检查已覆盖最高频的两种失效：`work-repo.base` 缺失、漏传 `--guard-from`。
+   剩下的"基线是否陈旧"只能在推送时由 `_guard()` 用远端 `base_commit` 权威判定。
+
+若将来确需补强，**只允许**做成独立的可选命令（如 `check_workrepo_baseline.py`），
+须满足：显式调用才跑、需要 `GITHUB_TOKEN`、失败仅提示不阻断收工、不改动 `gh_push.py`。
+不要把它塞进 `close_out.py` 的常规路径。
+
 ### 3.4 并发会话遗留的"未推提交"必须带走
 
 收工 `git status -sb` 若显示 `ahead N`，说明**别的会话提交过但没推上去**（常因网络握手失败）。
