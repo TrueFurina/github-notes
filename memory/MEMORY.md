@@ -41,6 +41,11 @@
 - 剩余真 bug 多在「拥挤脆弱子系统」（tomlkit out-of-order）或需「设计决策」（jsonpickle #454 空 dict、reader #305 recent-sort）。
 - 下一靶场策略：换更低拥挤度/更小众库，或做实质 feature/复杂修复，而非抢小修。
 - ★ **红海实证（11-04）**：`python-babel/babel` 93 个 open PR，5 个漂亮带复现的 bug issue（#1398/#1387/#1323/#1209/#1390）**每一个都已挂着一个 open PR**（#1399/#1388/#1324/#1279/#1391），正文自述 "Identified and tested with AI assistance" → 判重教训的真实场景，直接放弃。**可行靶反例**：`getludic/ludic`（★895、openPR=0、CONTRIBUTING 明确欢迎且无需先指派、纯 Python 零重依赖、当日活跃）。选靶三信号缺一不可：openPR 低 + 明确接受外部 PR + 纯逻辑可离线复现。
+- ★ **低 open-PR 数有三种成因，只读数字必然误判（11-04 三假靶实证）**：①拒绝外部贡献（openai-agents-python）；②维护者合并极快（`cdgriffith/Box`：7 个候选 bug issue 的 timeline 每个都挂着已 closed 修复 PR，汇总在 #346，open PR 仅剩 2）；③维护者主动清理 agent 边角 PR（`Kozea/tinycss2`：#77/#79/#81/#82 全 `closed,merged=False`）。必须结合最近 20 个 PR 的 merged 比例、关闭评论、issue timeline 判断。
+- ★ **选靶要读 CoC / 贡献指南全文，不只看 CONTRIBUTING**：CourtBouillon（tinycss2 / WeasyPrint）明文要求「Report real bugs you have in real life」「Ask before sending code」「一个项目一次只能一个 PR」「Use your own words」，不遵守可直接关闭；maintainer 对「无真实场景的往返 fuzz 边角」原话是 "what I want to guarantee is my mental health... hard to talk to bots all the day long"。
+- ★ **判重三连**：issue 列表 + open PR + **closed PR / issue timeline**。Box 证明「open PR 少」≠「没人做过」；babel 证明「issue 漂亮」≠「没被抢」。
+- ★ **fuzz 的价值是证明清白，不是拿来开 PR**：tinycss2 `url(\1)` 的往返破坏在 HEAD 上确实可复现（真 bug），但属无真实场景的边角，PR #79 被明确拒绝，本轮按「不硬凑」不去重提。`serialize_nth` 穷举 a,b∈[-6,6] 共 169/169 通过 = 干净负结果，记录不提交。
+- **成功要素回看**：3 个 merged + ludic #151 全部来自「读源码做安全/正确性审计 + 有真实用户影响的 bug」；本轮所有「扫 issue」尝试全撞红海 → **下一轮优先源码审计路线，而非扫 issue**。详见 `github-notes/workbench/docs/选靶实证-三个假靶与新硬标准-2026-11-04.md`。
 
 ## AI/agent 生态选靶实测（2026-11-02）
 - open PR：agno 989、livekit 635、browser-use 439、pipecat 371、llm 356…（全部 >100）→ **AI 生态比通用库更红海**。
