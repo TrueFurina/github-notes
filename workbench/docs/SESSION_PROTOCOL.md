@@ -50,13 +50,37 @@ python D:/github/_notes/workbench/tools/close_out.py
 git -C D:/github/_notes add -A && git -C D:/github/_notes commit -m "..." && git -C D:/github/_notes push
 ```
 
-`close_out.py` 内部依次跑：`session_guard`（阻断）/ `dedupe_scan`（可回收估算）/ `workspace_map`（缺陷分布）/ `check_dual_sync` + `check_multi_version`（代码层漂移，仅提示）。**除守门外均不阻断、均不删除任何文件。**
+`close_out.py` 内部依次跑：`session_guard`（阻断）/ `dedupe_scan`（可回收估算）/ `workspace_map`（缺陷分布）/ `check_dual_sync` + `check_multi_version`（代码层漂移，仅提示）/ G5 work-repo 推送守门就绪检查。**除守门外均不阻断、均不删除、均不推送任何文件。**
 
 判据：
 - `session_guard` 必须通过（唯一阻断项）；
 - `workspace_map.py` 不得报"活跃目录里的缺陷版"；
 - `check_multi_version.py` 不得报**新出现的**分叉（既有的已在 `ALLOW_DIVERGE` 登记）；
 - 根目录不得出现**未登记**的 `_xxx` 新目录或新笔记叉。
+
+### 3.3 两条推送通道，共用一个收工闸
+
+`close_out.py` 是本工作区的**唯一收工闸**，同时照看两条推送通道——它们的守门机制不同，
+**不要试图把两套逻辑揉成一个脚本**：
+
+| 通道 | 命令 | 守门机制 | 阻断性 |
+|---|---|---|---|
+| **A · notes 真源**（本仓库） | `git -C D:/github/_notes push` | `pre-commit` 钩子 → `session_guard`（单一真源 / 根目录无 .md） | **收工时阻断** |
+| **B · work-repo 上游贡献** | `python gh_push.py ... --guard-from work-repo.base` | `_guard()` 用基线快照逐文件比对远端 `base_commit`（R58 事故后建） | **推送时阻断** |
+
+- 通道 B 的 guard 依赖**远端当前内容**，必须在推送流程内部执行，故收工闸只做 G5 **就绪检查**：
+  确认 `work-repo.base` 存在且非空、提醒推送时务必带 `--guard-from`。刻意不改写 `gh_push.py`
+  （活跃贡献流水线）。
+- **漏传 `--guard-from` = 并发防护完全失效**。`force:false` 只防 ref 被他人改，
+  **不防文件内容被整段覆盖**——这正是 R58 的根因（详见 `ROUND_PROTOCOL.md` / `gh_push.py` docstring）。
+- 通道 A 的 `pre-commit` 钩子同理：本机随时重置，钩子要从仓库内副本重装
+  （`cp workbench/tools/pre-commit.hook .git/hooks/pre-commit`）。
+
+### 3.4 并发会话遗留的"未推提交"必须带走
+
+收工 `git status -sb` 若显示 `ahead N`，说明**别的会话提交过但没推上去**（常因网络握手失败）。
+这些提交是别人的工作，**严禁 `reset` / 丢弃**；直接随本轮一起 `git push`。
+推送前先 `git fetch` + `git rebase origin/main`（不得 `--force`），冲突按 §4 处置。
 
 ## 4. 并发冲突处置（沿用 ROUND 的 guard 精神）
 

@@ -1,0 +1,12 @@
+# Python 运行/编译缓存（跑 workbench/tools 下的工具会生成）
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
