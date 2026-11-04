@@ -5,15 +5,15 @@
 - 核心口径（用户定）：**先做好自己的事，不催 maintainer**；发现值得修的真 bug 就干净地修、带测试、开 PR，然后等。
 - 沉淀：**学校机器关机即重置** → 结论/产物一律**先推 `TrueFurina/github-notes` 再落本机**；本机记忆逐字备份在 `github-notes/memory/`。
 
-## 已开 PR（6 个，均带测试、mergeable、本场不催）
-| 仓库 | PR | 内容 | 状态 |
+## 已开 PR（6 个；11-04 复核：3 merged / 1 判重关闭 / 2 open 等 maintainer 侧 CI，本场不催）
+| 仓库 | PR | 内容 | 状态（2026-11-04 复核） |
 |---|---|---|---|
-| tigerless-labs/agent-memory | #118 | redaction 引号凭据漏拦 | open |
-| tigerless-labs/agent-memory | #119 | chunking 围栏内标题误判 | open |
-| tigerless-labs/agent-memory | #120 | frontmatter 注入（author 换行） | open |
-| pallets-eco/croniter | #287 | 6 字段 day-of-month 0 被改写 | open |
-| jmespath/jmespath.py | #391 | floor/ceil 对非有限值抛内置异常 | open |
-| lemon24/reader | #429 | entry_dedupe 复制保留标签 #381 | open |
+| tigerless-labs/agent-memory | #118 | redaction 引号凭据漏拦 | **merged** 11-03 |
+| tigerless-labs/agent-memory | #119 | chunking 围栏内标题误判 | **merged** 11-03 |
+| tigerless-labs/agent-memory | #120 | frontmatter 注入（author 换行） | **merged** 11-03 |
+| pallets-eco/croniter | #287 | 6 字段 day-of-month 0 被改写 | closed：maintainer potiuk 判重（#281 更早且更全，见下方教训） |
+| jmespath/jmespath.py | #391 | floor/ceil 对非有限值抛内置异常 | open，`unstable`：fork PR 的 Actions check-run=0、legacy status pending，等 maintainer 批准 CI，不催 |
+| lemon24/reader | #429 | entry_dedupe 复制保留标签 #381 | open，`unstable`：legacy status success(2) 但 check-run=0、required check 未跑，等 maintainer，不催 |
 
 ## 方法论（双轨 + 原则）
 - 双轨找 bug：①差异/往返预言机 fuzz 证明核心没坏；②扫友好仓库 open bug（带复现）。成熟库纯随机 fuzz 几乎必是干净负结果——价值在「证明清白」而非「找 bug」。
@@ -30,6 +30,7 @@
 - ★ **强制质量门上的误报比漏报更糟**：兜底正则 `\b\d{8,}\b` 把正文里任意 8+ 位数字（日期/时间戳/手机号/人数）当成引用 → 误报「幻觉引用」卡掉合格指南（comment-distillery `verify_citations` 实测）。修复=删裸长数字兜底，只留 `c\d{6,}`；强制引用本就是结构化 `[源:ID]` 标记（纯数字 ID 走主正则仍捕获）。与 verify_numbers 的「宁可漏报不可误报」哲学一致。
 - ★ **机验脚本对语料列有隐含契约**：`verify_numbers.load_scores_direct → prep.load_records` 必须有 content 列才能产出记录；缺 content 列会静默返回 0 记录 → `collect` 直接 `checked:0`（不是 bug，是测试语料构造错了）。审计机验类脚本时，先确认测试语料带齐 `id/content/score` 列。
 - **判重三条件**：同文件 + 同函数 + 同语义；且必须 diff 补丁，看标题/issue 号会误判。
+- ★ **开 PR 前必须连「该 issue 已挂着的 open PR」一起扫**：croniter #287 被 maintainer potiuk 以「与更早的 #281 同一个 `value_alias` 改动，且 #281 还覆盖 `second_at_beginning=True` + CHANGELOG」判重关闭。只看 issue 有无复现、不看 issue 下是否已存在更全的 PR，就会白开一个重复 PR。扫 bug 时：issue 列表 + PR 列表 + 两者关联一起看。
 - **「不硬凑」原则**：红海里撞车或需设计决策的 bug 一律放弃，宁可不发第 N 个 PR。已验证的落地流水线见 `github-notes/上游贡献落地流水线-2026-11-01.md`。
 
 ## 红海洞察（重要）
