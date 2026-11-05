@@ -52,6 +52,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -147,6 +148,9 @@ GATE_PATTERNS = [
     (r"need\s+to\s+be\s+assigned|must\s+be\s+assigned|assigned\s+to\s+(?:an?\s+)?issue", "需先被指派"),
     (r"rfc[-\s]approved|requires?\s+(?:an?\s+)?rfc", "需 RFC"),
     (r"\bCLA\b|contributor\s+license\s+agreement", "需 CLA"),
+    # ruyi 的真实门槛是 DCO sign-off（不是 CLA）；首版只认 CLA 曾把它误判成 GATED。
+    (r"\bDCO\b|developer\s+certificate\s+of\s+origin|signed-off-by|sign-?off\s+(?:your\s+)?commits?",
+     "需 DCO sign-off"),
     (r"please\s+ask\s+first|open\s+one\s+before\s+working|discuss\s+non-?trivial\s+changes", "需先开 issue/先问"),
 ]
 WELCOME_PATTERNS = [
@@ -167,7 +171,11 @@ def classify_policy(text: str | None) -> tuple[str, str]:
     for pat in AI_BAN_PATTERNS:
         if re.search(pat, low):
             return "AI_BAN", "禁止 AI/LLM 生成的内容（PR/issue/comment 均含）"
-    gates = [label for pat, label in GATE_PATTERNS if re.search(pat, low)]
+    # 11-04 合规复核修正：openai-agents-python 的 "Open an issue before preparing a
+    # listing change" 只约束「集成列表变更」，不是代码 PR 的前置门槛。
+    # 把 listing-change 句子剔除后再判 GATED，避免正则误报（条款命中须回读作用域）。
+    scoped = re.sub(r"[^\n]*listing change[^\n]*", "", low)
+    gates = [label for pat, label in GATE_PATTERNS if re.search(pat, scoped)]
     if gates:
         return "GATED", "、".join(dict.fromkeys(gates))
     for pat in WELCOME_PATTERNS:
@@ -176,7 +184,44 @@ def classify_policy(text: str | None) -> tuple[str, str]:
     return "UNKNOWN", "有政策文件但未识别到明确条款（需人工读原文）"
 
 
+def is_policy_file(path: str) -> bool:
+    """政策文件筛选（纯函数，可离线 self-test）。
+
+    anemoi-utils 的 `CONTRIBUTORS.md` 是贡献者名单，含 "contribut" 但不是政策
+    → 必须排除，否则会把「无政策」误判成 UNKNOWN。
+    """
+    if not re.search(r"(contribut|code.?of.?conduct|conduct)", path, re.I):
+        return False
+    if re.search(r"contributors?\.", path, re.I):
+        return False
+    return True
+
+
 def read_contributing(repo: str) -> tuple[str | None, str]:
+    """优先用 Git Trees API 递归列出政策文件，再回退到固定路径猜测。
+
+    11-04 合规复核教训：只按固定路径 GET 时，3 个仓库报「未找到」，
+    无法区分「路径猜错」与「真的没有」；且 reader 的政策是 `.rst`、tinycss2 是
+    `docs/contribute.rst`，固定清单都可能漏。递归 trees + truncated=false 才可信。
+    """
+    m = api(f"/repos/{repo}")
+    branch = m.get("default_branch", "main") if isinstance(m, dict) else "main"
+    tree = api(f"/repos/{repo}/git/trees/{urllib.parse.quote(branch)}?recursive=1")
+    if isinstance(tree, dict) and "tree" in tree and not tree.get("truncated"):
+        names = [x["path"] for x in tree["tree"] if is_policy_file(x["path"])]
+        # 合并所有政策文件：ruyi 的 CLA 条款在 .github/CONTRIBUTING.md，
+        # 只取第一个（CONTRIBUTING.md 中文版）会漏掉 → 必须拼接后整体判定。
+        chunks, used = [], []
+        for p in sorted(names, key=lambda q: (q.count("/"), q))[:8]:
+            d = api(f"/repos/{repo}/contents/{urllib.parse.quote(p)}?ref={branch}", quiet404=True)
+            if isinstance(d, dict) and d.get("encoding") == "base64":
+                try:
+                    chunks.append(base64.b64decode(d["content"]).decode("utf-8", "replace"))
+                    used.append(p)
+                except Exception:
+                    continue
+        if chunks:
+            return "\n".join(chunks), "+".join(used[:3])
     for p in CONTRIB_PATHS:
         d = api(f"/repos/{repo}/contents/{p}", quiet404=True)
         if isinstance(d, dict) and d.get("encoding") == "base64":
@@ -346,6 +391,32 @@ All feature work requires an RFC-approved proposal.
           verdict_of(today, policy="REJECT"), "EXCLUDE")
     check("T14 AI 禁令优先于活跃度 → EXCLUDE",
           verdict_of(today, policy="AI_BAN"), "EXCLUDE")
+    OPENAI_LISTING = """Pull requests are limited to repository collaborators.
+We do not accept pull requests from non-collaborators.
+Open an issue before preparing a listing change. Include the integration name.
+"""
+    check("T15 真实拒收原句 → REJECT（listing change 不掩盖）",
+          classify_policy(OPENAI_LISTING)[0], "REJECT")
+    LISTING_ONLY = """We welcome contributions.
+Open an issue before preparing a listing change. Include the integration name.
+"""
+    check("T16 listing change 不算代码 PR 前置门槛（合规复核误报修正）",
+          classify_policy(LISTING_ONLY)[0], "WELCOME")
+    check("T17 CONTRIBUTORS.md 是名单不是政策（递归 trees 实测误命中）",
+          is_policy_file("CONTRIBUTORS.md"), False)
+    check("T18 CONTRIBUTING.rst / docs/contribute.rst / CoC 都应被识别",
+          all(is_policy_file(p) for p in ("CONTRIBUTING.rst", "docs/contribute.rst",
+                                          ".github/CONTRIBUTING.md", "CODE_OF_CONDUCT.md")), True)
+    check("T19 普通源码文件不应被当成政策",
+          is_policy_file("src/core/parser.py"), False)
+    DCO = """Contributing
+The DCO is a declaration that you make when you sign-off a commit.
+Please read the Developer Certificate of Origin before contributing.
+"""
+    check("T20 DCO sign-off 门槛应被识别（ruyi 真实条款）",
+          classify_policy(DCO)[0], "GATED")
+    check("T21 DCO 说明里需给出门槛标签",
+          "需 DCO sign-off" in classify_policy(DCO)[1], True)
     print("-" * 60)
     print("  self-test " + ("PASS" if ok else "FAIL"))
     return 0 if ok else 1
