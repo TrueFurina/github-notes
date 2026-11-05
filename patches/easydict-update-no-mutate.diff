@@ -1,0 +1,26 @@
+--- easydict-orig/easydict-master/easydict/__init__.py	2024-03-04 20:03:03.000000000 +0800
++++ easydict-master/easydict/__init__.py	2026-11-06 00:06:02.448484900 +0800
+@@ -129,6 +129,14 @@
+     4
+     >>> d
+     {'c': 3.0}
++
++    update does not mutate its argument
++
++    >>> src = {'a': 1}
++    >>> d = EasyDict()
++    >>> d.update(src, b=2)
++    >>> src == {'a': 1}
++    True
+     """
+     def __init__(self, d=None, **kwargs):
+         if d is None:
+@@ -156,7 +164,7 @@
+     __setitem__ = __setattr__
+ 
+     def update(self, e=None, **f):
+-        d = e or dict()
++        d = dict(e) if e else {}
+         d.update(f)
+         for k in d:
+             setattr(self, k, d[k])
