@@ -1,0 +1,12 @@
+SecAutoMind-src|main|dirty:3644|fetchFAIL(rc128)|last:2026-11-02|url:https://github.com/TrueFurina/SecAutoMind-src.git
+_cd|main|dirty:12|fetchFAIL(rc128)|last:2026-11-02|url:https://[REDACTED_TOKEN]@github.com/TrueFurina/comment-distillery.git
+_cron_fork|fix/issue-280-day-zero-six-field|dirty:0|fetchFAIL(rc128)|last:2026-11-01|url:https://x-access-token:[REDACTED_TOKEN]@github.com/TrueFurina/croniter.git
+_marl_fresh||dirty:0|fetchFAIL(rc128)|last:|url:https://[REDACTED_TOKEN]@github.com/TrueFurina/marl-ecdsa.git
+_notes|main|dirty:3|fetchFAIL(rc128)|last:2026-11-05|url:https://[REDACTED_TOKEN]@github.com/TrueFurina/github-notes.git
+_oaa|main|dirty:2|fetchFAIL(rc128)|last:2026-10-30|url:https://[REDACTED_TOKEN]@github.com/openai/openai-agents-python.git
+_reader_pr|fix/381-entry-dedupe-reserved-tags|dirty:0|ahead:|behind:|last:2026-11-01|url:https://[REDACTED_TOKEN]@github.com/TrueFurina/reader.git
+audit-aerorider|main|dirty:0|ahead:1|behind:1|last:2026-11-01|url:https://github.com/TrueFurina/aerorider-delivery.git
+audit-distillery|main|dirty:0|fetchFAIL(rc124)|last:2026-11-01|url:https://github.com/TrueFurina/comment-distillery.git
+audit-marl|main|dirty:27|fetchFAIL(rc128)|last:2026-11-03|url:https://github.com/TrueFurina/marl-ecdsa.git
+audit-xihu-git|main|dirty:2|fetchFAIL(rc128)|last:2026-11-01|url:https://github.com/TrueFurina/xihu-sword-ctf-agent.git
+cyber-terms-hub||dirty:0|fetchFAIL(rc124)|last:|url:https://github.com/TrueFurina/cyber-terms-hub.git

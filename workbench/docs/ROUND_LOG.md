@@ -12006,3 +12006,6 @@ ruff                64 → 64，**改前/改后 concise diff 为空**（不是"�
 值守体检 2026-11-05 22:56：脚本OK iso_prep OK webui OK audit OK mutbak 12 py OK 行数12005 ⚠️体积
 
 ---end 值守 2026-11-05 22:56---
+值守体检 2026-11-05 22:57：脚本OK iso_prep OK webui OK audit OK mutbak 12 py OK 行数12008 ⚠️体积
+
+---end 值守 2026-11-05 22:57---

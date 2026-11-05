@@ -1,0 +1,16 @@
+SecAutoMind-src|TrueFurina/SecAutoMind-src.git
+_cd|TrueFurina/comment-distillery.git
+_cron_fork|TrueFurina/croniter.git
+_marl_fresh|TrueFurina/marl-ecdsa.git
+_notes|TrueFurina/github-notes.git
+_oaa|openai/openai-agents-python.git
+_reader_pr|TrueFurina/reader.git
+audit-aerorider|TrueFurina/aerorider-delivery.git
+audit-distillery|TrueFurina/comment-distillery.git
+audit-marl|TrueFurina/marl-ecdsa.git
+audit-xihu-git|TrueFurina/xihu-sword-ctf-agent.git
+cyber-terms-hub|TrueFurina/cyber-terms-hub.git
+honesty-ci-patterns|TrueFurina/honesty-ci-patterns.git
+marl-ecdsa|TrueFurina/marl-ecdsa.git
+sa-src|TrueFurina/SecAutoMind-src.git
+spn-linear-cryptanalysis|TrueFurina/spn-linear-cryptanalysis.git

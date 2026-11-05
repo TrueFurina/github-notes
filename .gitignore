@@ -10,3 +10,11 @@ __pycache__/
 .idea/
 Thumbs.db
 .DS_Store
+
+# 多仓巡检的临时产物可能把 remote URL 里的明文 token 写进来（11-05 实测）。
+# 不纳入真源；确需留档时先脱敏。
+workbench/docs/_mp_*.txt
+
+# 明文凭据兜底：任何含 GitHub token 前缀的文件都不该进仓库
+*.token
+*_secrets*
