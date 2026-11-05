@@ -9,7 +9,7 @@
 - 用户口径：**先做好自己的事，不催 maintainer**；真 bug 就干净地修、带测试、开 PR、然后等。**质量与诚实 > 数量与合并率，不硬凑**（红海撞车或需设计决策一律放弃）。
 - 学校机器关机即重置 → 结论/产物**先推 `TrueFurina/github-notes` 再落本机**；本机 `.workbuddy-ai/memory/` 逐字备份在 `github-notes/memory/`。
 
-## 已开 PR（11 个；11-06 复核：3 merged / 1 判重关闭 / 1 AI 政策关闭 / 6 open 等 CI，本场不催）
+## 已开 PR（12 个；11-06 复核：3 merged / 1 判重关闭 / 1 AI 政策关闭 / 7 open 等 CI，本场不催）
 | 仓库 | PR | 内容 | 状态 |
 |---|---|---|---|
 | tigerless-labs/agent-memory | #118/#119/#120 | 凭据漏拦 / 围栏标题 / frontmatter 注入 | **merged** 11-03 |
@@ -20,6 +20,7 @@
 | mahmoud/boltons | #735 | `MinIDMap` GC 回调遗留 `print` | open（11-05）34 PASSED |
 | alecthomas/voluptuous | #569 | `Object` 遇 dict 输入静默丢数据 + required=True 假报错 | open（11-05）183 PASSED，等 CI/merge |
 | makinacorpus/easydict | #54 | `update()` 遇「位置 dict + 关键字」时静默改写调用方入参 | open（11-06）64 doctest PASSED，等 CI/merge |
+| python-constraint/python-constraint | #116 | VariableMin/MaxSumConstraint 乘数估计写 `domains[var]*multiplier`（列表重复）→ float 崩溃 + 整型漏解 | open（11-06）测例 10 passed（229 套件无回归），等 CI/merge |
 
 ## 找 bug（详见总纲 §找 bug / §高命中漏洞模式）
 - **双轨**：①差异/往返 fuzz 证明核心没坏；②扫带复现的 open bug（真正产出 PR）。成熟库随机 fuzz 多是**干净负结果**，价值在证明清白，不是拿来开 PR。优先「**源码安全/正确性审计 + 真实用户影响**」而非扫 issue——3 个 merged 与 ludic #151 全来自此。
