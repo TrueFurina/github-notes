@@ -55,5 +55,13 @@ GitHub 账号治理、上游贡献洞察、挂机巡检的**方法与踩坑账�
 
 ## 环境
 
+> **⚠ 现状更正（2026-11-05）**：下面两段是 11-01 的当时记录，**已过期**。
+> - `git` 现在**可用**（`/mingw64/bin/git`），日常推送走标准 `fetch` → `rebase` → `push`。
+> - 但 `github.com` git 协议会偶发 `CONNECT tunnel 502` / `schannel` 握手失败 →
+>   加 `-c http.version=HTTP/1.1` 可通；仍不通才用 Git Data API / REST Contents API 兜底
+>   （`api.github.com` 与 `github.com` 走不同路由，常常前者正常）。
+> - 已开 PR 数与状态、工具链用法以 **`memory/MEMORY.md`** 与
+>   **`workbench/docs/SESSION_PROTOCOL.md`** 为唯一真源，本页历史记录不随之更新。
+
 工作机为 Windows + PowerShell 5.1，**无 git 二进制**，推送走 GitHub Git Data API（`gh_push.py`）。
 网络到 `api.github.com` 会间歇 TLS 中断（TCP 可达但握手被重置），换域名无法绕过。

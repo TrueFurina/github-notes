@@ -75,6 +75,8 @@
 - ★ `git fetch/push` 撞 `CONNECT tunnel failed, response 502` / `Empty reply from server`（代理对 HTTP/2 CONNECT 隧道处理有问题）→ 加 `-c http.version=HTTP/1.1` 可通（11-04 实测：普通 fetch 连败 5 次、`git -c http.version=HTTP/1.1 fetch origin` 一次成功）。「多试几次就能恢复」的判断不完整。仍不通 → REST Contents API PUT 兜底（api.github.com 与 github.com 走不同路由，git 全挂时 API 正常）；API 推送后本地 `fetch` + `rebase origin/main`，git 自动 `dropping ... patch contents already upstream`（零丢失）→ 本地==远端。
 - API 429 → 重试 + 退避 + URL 中文路径 `urllib.parse.quote`。后台任务跨调用会被回收，长跑前台分批。
 - 后台 pytest 临时目录可能触发沙箱 safe-delete 卡住 → 用 `--basetemp` 指到工作区内目录拿干净计数。
+- ★ **凭据审计结论（11-05，勿重复恐慌）**：`github-notes` **105 个历史提交 + 当前树均无真实凭据**（`git log --all -S` + 真实形态正则 `gh[opusr]_[A-Za-z0-9]{30,}` / `github_pat_` / `AKIA[A-Z0-9]{16}` 逐个 commit 核验为 0）。全工作区 90792 个文本文件的 28 处命中**全是假阳性**：`AKIAIOSFODNN7EXAMPLE`（AWS 教学示例）、`ghp_abcdefgh...`（占位符）、Pillow `ImageFont.py` 内嵌 base64 字体二进制里偶然的 `AKIA...`。文档里 `ghp_`/`AKIA`/`xoxb-` 的裸前缀命中是**说明文字**，不是泄露。**判据必须区分「前缀字符串」与「真实形态 token」**。11-05 曾在并发会话巡检产物里出现过真实 `gho_` token，但在提交前已脱敏、从未进 git 历史；仍建议轮换（曾以明文落本机磁盘）。`_notes/.gitignore` 已加 `workbench/docs/_mp_*.txt` + 凭据兜底规则。
+- ★ **真源文档也可能过期（11-05 盘点）**：`README.md` / `上游贡献手册.md`（两份镜像）写于 11-01，含「无 git 二进制」「当前 3 个 PR」等过期事实。**不重写正文**（保留当时判断），已在文件头加「现状更正（2026-11-05）」块指向 `memory/MEMORY.md` 与现行工具。`SESSION_PROTOCOL.md §3` 是**现行操作清单**，已补 `check_cross_repo_fix`。判别原则：历史记录加更正块，现行清单直接改。
 - 库要求 Python ≥3.14（t-strings）而本机最高 3.13（系统 `python`=3.13.14、`_sdk_env`=3.12）→ 用 inert stub 注入 `sys.modules['string.templatelib']`（提供 Template/Interpolation 哨兵）即可跑**未修改**的上游源码；但类体内自引用注解在 3.13 会 NameError（3.14 默认延迟注解）→ 本地副本加 `from __future__ import annotations` 作语义等价垫片。**垫片绝不能推上游**：推送前从远端原文重新生成补丁并断言无 `from __future__`；PR 里必须写明「未跑完整 pytest 套件」的验证边界。
 
 ## 可复用本地环境

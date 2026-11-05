@@ -41,7 +41,7 @@ git -C D:/github/_notes pull --ff-only
 ## 3. 收工前（强制，否则视为未完成）
 
 ```bash
-# 3.0 统一收工报告：守门（阻断）+ 去重 + 体检 + 代码层漂移（均提示）
+# 3.0 统一收工报告：守门（阻断）+ 去重 + 体检 + 代码层漂移 + 跨仓修复核查（均提示）
 #     机器重置后重装钩子：cp workbench/tools/pre-commit.hook .git/hooks/pre-commit
 python D:/github/_notes/workbench/tools/close_out.py
 
@@ -50,7 +50,12 @@ python D:/github/_notes/workbench/tools/close_out.py
 git -C D:/github/_notes add -A && git -C D:/github/_notes commit -m "..." && git -C D:/github/_notes push
 ```
 
-`close_out.py` 内部依次跑：`session_guard`（阻断）/ `dedupe_scan`（可回收估算）/ `workspace_map`（缺陷分布）/ `check_dual_sync` + `check_multi_version`（代码层漂移，仅提示）/ G5 work-repo 推送守门就绪检查。**除守门外均不阻断、均不删除、均不推送任何文件。**
+`close_out.py` 内部依次跑：`session_guard`（阻断）/ `dedupe_scan`（可回收估算）/ `workspace_map`（缺陷分布）/ `check_dual_sync` + `check_multi_version`（代码层漂移，仅提示）/ **`check_cross_repo_fix`（跨仓同源修复传播核查，只读清单 + clone 过期警示）** / G5 work-repo 推送守门就绪检查。**除守门外均不阻断、均不删除、均不推送任何文件。**
+
+> **默认离线**：常规收工闸不发网络请求。需要核验本地 clone 是否与远端真源一致时，
+> 显式跑 `python workbench/tools/check_cross_repo_fix.py --verify-remote`（只读 GET）。
+> 开 PR 前的政策/判重预检另走 `pre_pr_gate.py` / `scout_targets.py --preflight`，
+> **不接进 close_out**（网络依赖会让收工闸误报，见 §3.3 决策）。
 
 判据：
 - `session_guard` 必须通过（唯一阻断项）；
