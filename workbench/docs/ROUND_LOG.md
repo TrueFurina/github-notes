@@ -12071,3 +12071,31 @@ ruff                64 → 64，**改前/改后 concise diff 为空**（不是"�
 值守体检 2026-11-05 23:26：脚本OK iso_prep OK webui OK audit OK mutbak 12 py OK 行数12066 ⚠️体积
 
 ---end 值守 2026-11-05 23:26---
+
+值守核验 R51：成对OK shaOK 远端较新OK
+
+---end 值守 2026-11-05 23:27---
+值守体检 2026-11-05 23:27：脚本OK iso_prep OK webui OK audit OK mutbak 12 py OK 行数12073 ⚠️体积
+
+---end 值守 2026-11-05 23:27---
+
+值守核验 R51：成对OK shaOK 远端较新OK
+
+---end 值守 2026-11-05 23:27---
+值守体检 2026-11-05 23:27：脚本OK iso_prep OK webui OK audit OK mutbak 12 py OK 行数12080 ⚠️体积
+
+---end 值守 2026-11-05 23:27---
+
+值守核验 R51：成对OK shaOK 远端较新OK
+
+---end 值守 2026-11-05 23:27---
+值守体检 2026-11-05 23:27：脚本OK iso_prep OK webui OK audit OK mutbak 12 py OK 行数12087 ⚠️体积
+
+---end 值守 2026-11-05 23:27---
+
+值守核验 R51：成对OK shaOK 远端较新OK
+
+---end 值守 2026-11-05 23:27---
+值守体检 2026-11-05 23:27：脚本OK iso_prep OK webui OK audit OK mutbak 12 py OK 行数12094 ⚠️体积
+
+---end 值守 2026-11-05 23:27---
