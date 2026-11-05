@@ -36,11 +36,25 @@
   · **默认离线清单**：内置已人工核验过的可信库，不依赖被污染的全局搜索。
   · **不假装能判 S3**：工具只列事实，最终「值不值得开 PR」由人决定。
 
+★ --audit-existing：已开 PR 的存量政策合规复核（2026-11-05）
+------------------------------------------------------------
+11-04 发现 reader `CONTRIBUTING.rst` 禁止 AI 生成内容，而 #429 已开且补丁/测试/描述
+均由 AI 生成 → 说明「开过 PR 的仓库」也需要周期性复核政策，不能只在新选靶时查。
+该模式复用同一套 `read_contributing` / `classify_policy`，额外核对
+**PR 目标分支 vs 仓库默认分支** 与 PR 当前状态（open/closed/merged）。
+清单是「我方开过的 PR」登记，状态一律现场查 API，不硬编码结论。
+
+设计边界：
+  · 只报事实与风险，**不撤回、不评论、不催**（关闭自己的 PR 属公开不可逆动作）。
+  · 政策文件用 Git Trees 递归列（同选靶模式），避免只查 `.md` 漏掉 `.rst`。
+  · 默认 rc=0；`--strict` 在存在冲突时返回 1。
+
 用法：
-    python scout_targets.py                      # 核查内置清单
+    python scout_targets.py                      # 核查内置选靶清单
     python scout_targets.py --repo owner/name   # 追加单个库（可多次）
+    python scout_targets.py --audit-existing    # 复核已开 PR 的政策/分支/状态
     python scout_targets.py --self-test         # 用真实 CONTRIBUTING 文本验证判据
-    python scout_targets.py --strict           # 存在候选时 rc=1
+    python scout_targets.py --strict           # 存在候选/冲突时 rc=1
 """
 from __future__ import annotations
 
@@ -85,6 +99,21 @@ CROWD_LIMIT = 10
 # 活跃度硬标准（11-01 已记录：ftfy 停滞 ~1 年、darker 停滞 1 年、jaraco 极小但相对拥挤）。
 # 用最近推送距今天数；超过阈值直接 STALLED，不再算候选。
 STALE_DAYS = 120
+
+# 我方已开的 PR 登记（来源 memory/MEMORY.md「已开 PR」表）。
+# 只登记 repo + PR 号 + 一句内容；**状态一律现场查 API**，不在这里写结论。
+# 11-05 结案：#429 被 maintainer 以 AI 政策关闭（co-author trailer 触发拒绝）；
+# 该仓库不再开新 PR。此表保留为历史台账，不删除。
+# openai-agents-python #5475 是 issue 分析（按政策未开 PR），故不在本表。
+EXISTING_PRS = [
+    ("tigerless-labs/agent-memory", 118, "redaction 引号凭据漏拦"),
+    ("tigerless-labs/agent-memory", 119, "chunking 围栏内标题误判"),
+    ("tigerless-labs/agent-memory", 120, "frontmatter 注入"),
+    ("pallets-eco/croniter", 287, "6 字段 day-of-month 0"),
+    ("jmespath/jmespath.py", 391, "floor/ceil 非有限值"),
+    ("lemon24/reader", 429, "entry_dedupe 保留标签"),
+    ("getludic/ludic", 151, "属性引号注入"),
+]
 
 
 def _headers() -> dict:
@@ -325,6 +354,98 @@ def report(results: list[Result]) -> int:
     return len(cand)
 
 
+# ---------------------------------------------------------------------------
+# --audit-existing：已开 PR 的存量政策合规复核（只读 GET）
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ExistingPR:
+    repo: str
+    number: int
+    what: str
+    state: str = "?"
+    merged: bool = False
+    base: str = "?"
+    default_branch: str = "?"
+    policy: str = "NONE"
+    policy_note: str = "-"
+    contrib_path: str = "-"
+    err: str = ""
+
+    @property
+    def branch_ok(self) -> bool:
+        return self.base == self.default_branch and self.base != "?"
+
+    @property
+    def verdict(self) -> str:
+        if self.err:
+            return "ERR"
+        if self.policy == "AI_BAN":
+            return "CONFLICT"          # AI 生成内容与政策冲突（我方工作流）
+        if self.policy == "REJECT":
+            return "CONFLICT"          # 拒收外部 PR 却开了 PR
+        if not self.branch_ok:
+            return "BRANCH_MISMATCH"   # PR 进错分支
+        if self.policy == "GATED":
+            return "GATED"             # 有门槛，需人工确认当时是否遵守
+        return "OK"
+
+
+def audit_one(item: tuple[str, int, str]) -> ExistingPR:
+    repo, num, what = item
+    out = ExistingPR(repo, num, what)
+    try:
+        pr = api(f"/repos/{repo}/pulls/{num}")
+        if not isinstance(pr, dict) or "_err" in pr:
+            out.err = str(pr)[:60]
+            return out
+        out.state = pr.get("state", "?")
+        out.merged = bool(pr.get("merged"))
+        out.base = (pr.get("base") or {}).get("ref", "?")
+        m = api(f"/repos/{repo}")
+        out.default_branch = m.get("default_branch", "?") if isinstance(m, dict) else "?"
+        text, cpath = read_contributing(repo)
+        out.policy, out.policy_note = classify_policy(text)
+        out.contrib_path = cpath
+    except Exception as e:  # noqa: BLE001
+        out.err = f"{type(e).__name__}: {str(e)[:50]}"
+    return out
+
+
+def audit_existing_report(rows: list[ExistingPR]) -> int:
+    order = {"CONFLICT": 0, "BRANCH_MISMATCH": 1, "GATED": 2, "ERR": 3, "OK": 4}
+    print(f"{'判定':<16} {'PR':<38} {'state':<8} {'merged':<7} {'base':<9} {'default':<9} 政策")
+    print("-" * 112)
+    for r in sorted(rows, key=lambda x: (order.get(x.verdict, 9), x.repo, x.number)):
+        tag = f"{r.repo}#{r.number}"
+        print(f"{r.verdict:<16} {tag:<38} {r.state:<8} {str(r.merged):<7} "
+              f"{r.base:<9} {r.default_branch:<9} {r.policy}")
+        if r.verdict != "OK":
+            detail = r.err or f"{r.policy_note}  [{r.contrib_path}]"
+            print(f"                 └ {detail}")
+        print(f"                   内容: {r.what}")
+    conflicts = [r for r in rows if r.verdict == "CONFLICT"]
+    print(f"\n{'=' * 112}")
+    print(f"已开 PR: {len(rows)} 个 | 政策冲突: {len(conflicts)} 个")
+    if conflicts:
+        for r in conflicts:
+            print(f"  ⚠ {r.repo}#{r.number}  policy={r.policy} state={r.state} merged={r.merged}")
+    print("\n处置口径（既定）：**不撤回、不发新评论、不催 maintainer**，保持现状由对方判断；")
+    print("关闭自己的 PR 属公开不可逆动作，本工具绝不执行。冲突仓库不再开新 PR。")
+    print("★ 政策文件用 Git Trees 递归列（含 .rst / docs/ / CODE_OF_CONDUCT），避免漏查。")
+    print("★ 本表只登记我方开过的 PR；状态一律现场查 API，不硬编码结论。")
+    print("★ openai/openai-agents-python #5475 是按政策只发 issue 分析，未开 PR，故不在表内。")
+    print("\n本工具只读（仅 GET），未改动任何仓库、未开 PR、未发 issue、未催 maintainer。")
+    return len(conflicts)
+
+
+def audit_existing() -> int:
+    print(f"=== 已开 PR 贡献政策合规复核（{len(EXISTING_PRS)} 个 PR；只读 GET）===")
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        rows = list(ex.map(audit_one, EXISTING_PRS))
+    return audit_existing_report(rows)
+
+
 def self_test() -> int:
     ok = True
 
@@ -417,6 +538,22 @@ Please read the Developer Certificate of Origin before contributing.
           classify_policy(DCO)[0], "GATED")
     check("T21 DCO 说明里需给出门槛标签",
           "需 DCO sign-off" in classify_policy(DCO)[1], True)
+
+    def averdict(policy, base="main", default="main", err=""):
+        return ExistingPR("x/y", 1, "-", base=base, default_branch=default,
+                          policy=policy, err=err).verdict
+
+    check("T22 无政策 + 分支正确 → OK", averdict("NONE"), "OK")
+    check("T23 AI 禁令 → CONFLICT（reader #429 情形）", averdict("AI_BAN"), "CONFLICT")
+    check("T24 拒收外部 PR → CONFLICT", averdict("REJECT"), "CONFLICT")
+    check("T25 PR 进错分支 → BRANCH_MISMATCH", averdict("NONE", base="main", default="develop"),
+          "BRANCH_MISMATCH")
+    check("T26 有门槛 → GATED", averdict("GATED"), "GATED")
+    check("T27 API 错误优先 → ERR", averdict("NONE", err="HTTP 502"), "ERR")
+    check("T28 合并后的 PR 仍要报冲突（历史不可改）",
+          ExistingPR("x/y", 1, "-", state="closed", merged=True,
+                     base="main", default_branch="main", policy="AI_BAN").verdict,
+          "CONFLICT")
     print("-" * 60)
     print("  self-test " + ("PASS" if ok else "FAIL"))
     return 0 if ok else 1
@@ -425,13 +562,22 @@ Please read the Developer Certificate of Origin before contributing.
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="三信号选靶（只读）")
     ap.add_argument("--repo", action="append", default=[], help="追加仓库 owner/name（可多次）")
-    ap.add_argument("--strict", action="store_true", help="存在候选时返回 rc=1")
+    ap.add_argument("--audit-existing", action="store_true",
+                    help="复核已开 PR 的政策/目标分支/状态（只读）")
+    ap.add_argument("--strict", action="store_true", help="存在候选/冲突时返回 rc=1")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args(argv)
     if args.self_test:
         return self_test()
     if not (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")):
         print("✗ 无 GITHUB_TOKEN，无法核查（本工具需要只读 API 权限）")
+        return 0
+    if args.audit_existing:
+        n = audit_existing()
+        if args.strict and n:
+            print(f"\n--strict: {n} 个政策冲突，返回非 0。")
+            return 1
+        print("\n默认 rc=0（报告工具，不阻断收工）。")
         return 0
     repos = list(dict.fromkeys(DEFAULT_REPOS + args.repo))
     print(f"=== 三信号选靶（{len(repos)} 个可信库；只读 GET）===")
