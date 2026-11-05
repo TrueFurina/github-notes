@@ -74,7 +74,9 @@ import base64
 import http.client
 import json
 import os
+import pathlib
 import re
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -713,6 +715,22 @@ Please read the Developer Certificate of Origin before contributing.
     check("T33 dependabot 自动化提交不属 agent 署名（避免误伤合法 bot）",
           identity_hits("dependabot[bot]", "49699333+dependabot[bot]@users.noreply.github.com",
                         "build(deps): bump x"), [])
+    # T34：scan_local_commits 走真实 git 子进程；首版漏 import subprocess 导致
+    # --preflight --local-dir 直接 NameError，而离线 identity_hits 测不到 → 必须锁住。
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        d = pathlib.Path(td)
+        for c in (["git", "init", "-q", str(d)],
+                  ["git", "-C", str(d), "config", "user.name", "TrueFurina Agent"],
+                  ["git", "-C", str(d), "config", "user.email", "agent@truefurina.local"]):
+            subprocess.run(c, capture_output=True, timeout=10)
+        (d / "f.txt").write_text("x", encoding="utf-8")
+        subprocess.run(["git", "-C", str(d), "add", "f.txt"], capture_output=True, timeout=10)
+        subprocess.run(["git", "-C", str(d), "commit", "-q", "-m", "fix: x"],
+                       capture_output=True, timeout=10)
+        res = scan_local_commits(str(d))
+        ok_local = (not res["err"]) and len(res["commits"]) == 1 and bool(res["hits"])
+        check("T34 真实 git 仓库扫描能跑通且命中 agent 署名（防漏 import）", ok_local, True)
     print("-" * 60)
     print("  self-test " + ("PASS" if ok else "FAIL"))
     return 0 if ok else 1
