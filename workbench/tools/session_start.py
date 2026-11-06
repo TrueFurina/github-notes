@@ -15,8 +15,11 @@ import pathlib
 import subprocess
 import sys
 
-ROOT = pathlib.Path("D:/github")
-NOTES = ROOT / "_notes"
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import wsroot  # noqa: E402  工作区根解析（任意项目 + WB_WORKSPACE 覆盖）
+
+ROOT = wsroot.workspace_root()
+NOTES = wsroot.notes_root()
 SESSIONS = ROOT / "sessions"
 GUARD = NOTES / "workbench" / "tools" / "session_guard.py"
 

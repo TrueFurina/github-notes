@@ -34,7 +34,10 @@ import sys
 import pathlib
 
 HERE = pathlib.Path(__file__).resolve().parent
-WORKSPACE = pathlib.Path("D:/github")
+sys.path.insert(0, str(HERE))
+import wsroot  # noqa: E402  工作区根解析（任意项目 + WB_WORKSPACE 覆盖）
+
+WORKSPACE = wsroot.workspace_root()
 GUARD = HERE / "session_guard.py"
 DEDUPE = HERE / "dedupe_scan.py"
 WSMAP = HERE / "workspace_map.py"

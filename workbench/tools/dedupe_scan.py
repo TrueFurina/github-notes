@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""D:/github 去重扫描 —— 只读，不删任何东西。
+"""工作区去重扫描 —— 只读，不删任何东西。
+
+根目录由 `wsroot.workspace_root()` 解析（默认=notes 仓的父目录，
+可用 `WB_WORKSPACE` 覆盖），因此同一份脚本可用于任意项目。
 
 输出四类可回收候选，并给建议动作；供人工确认后再删。
 用法:
@@ -8,9 +11,13 @@
 """
 from __future__ import annotations
 import pathlib
+import sys
 
-ROOT = pathlib.Path("D:/github")
-SKIP_DIRS = {"_notes"}  # 唯一真源，不扫
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import wsroot  # noqa: E402  工作区根解析（任意项目 + WB_WORKSPACE 覆盖）
+
+ROOT = wsroot.workspace_root()
+SKIP_DIRS = {wsroot.notes_root().name}  # 唯一真源，不扫
 
 
 def du(path: pathlib.Path) -> int:

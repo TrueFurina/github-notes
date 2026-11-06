@@ -42,7 +42,7 @@ git -C D:/github/_notes pull --ff-only
 
 ```bash
 # 3.0 统一收工报告：守门（阻断）+ 去重 + 体检 + 代码层漂移 + 跨仓修复核查（均提示）
-#     机器重置后重装钩子：cp workbench/tools/pre-commit.hook .git/hooks/pre-commit
+#     机器重置后重装钩子：python workbench/tools/bootstrap.py（见 §6）
 python D:/github/_notes/workbench/tools/close_out.py
 
 # 3.1 守门也接在 pre-commit 钩子里，commit 会自动跑（双保险）
@@ -117,6 +117,47 @@ git -C D:/github/_notes add -A && git -C D:/github/_notes commit -m "..." && git
 | 根目录冒出新的 `_xxx` 临时区 | 停手，移入 `sessions/$ID/` |
 | `git push` 被拒（远端被改） | 先 `pull --rebase` 再推，不得 `--force` |
 | 配额 < 200 且本轮要推送 | 只做本地分析 |
+
+---
+
+## 6. 跨项目复用与自愈（2026-11-06）
+
+**动因**：本机「关机即重置、基本挂机跑」。原先工具把根目录写死成 `D:/github`，
+换项目直接失效；`.git/hooks/` 又不受版本控制，机器一重置钩子就没了。
+
+**改法**：新增 `workbench/tools/wsroot.py` 统一解析根目录（优先级：显式参数 →
+`WB_WORKSPACE` 环境变量 → 由工具所在位置 `…/<notes>/workbench/tools/` 上溯 →
+CWD）。`session_guard` / `session_start` / `close_out` / `dedupe_scan` /
+`check_cross_repo_fix` 全部改为调用它，**同一份脚本复制到任何项目都能用**。
+
+```bash
+# 机器重置 / 换机器后，一条命令恢复（幂等、无交互、不 commit、不 push）
+python D:/github/_notes/workbench/tools/bootstrap.py
+
+# 挂机巡检：只读，全部健康则 rc=0，任一未就绪则 rc=1
+python D:/github/_notes/workbench/tools/bootstrap.py --check
+
+# 给另一个项目装（会在目标下建 <notes> 仓 + 目录结构 + pre-commit 钩子）
+python D:/github/_notes/workbench/tools/bootstrap.py --workspace E:/projX
+python D:/github/_notes/workbench/tools/bootstrap.py --workspace E:/projX --notes _kb
+
+# 多项目：登记后一条命令管全部
+python D:/github/_notes/workbench/tools/bootstrap.py --register E:/projX
+python D:/github/_notes/workbench/tools/bootstrap.py --all --check
+
+# 排查「到底认的哪个目录」
+python D:/github/_notes/workbench/tools/wsroot.py --where
+```
+
+注册表落在 `workbench/projects.json`（跟真源一起上远端，重置后不丢）。
+
+判据：
+- `bootstrap.py --check` 必须 rc=0；
+- 目标项目里 `session_guard.py` 的 `--self-test` 与现场守门都必须通过；
+- 钩子装好后，故意在根目录放一个 `.md` 再 commit，**必须被拦**（装不上等于没装）。
+
+边界：`bootstrap` 只写结构、工具、`.gitignore`、钩子；**不删文件、不 `git add`、
+不 commit、不 push**。真正的收工推送仍走 §3。
 
 ---
 

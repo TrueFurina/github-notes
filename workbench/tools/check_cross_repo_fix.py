@@ -49,7 +49,10 @@ import urllib.request
 from collections import defaultdict
 from dataclasses import dataclass
 
-ROOT = pathlib.Path("D:/github")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import wsroot  # noqa: E402  工作区根解析（任意项目 + WB_WORKSPACE 覆盖）
+
+ROOT = wsroot.workspace_root()
 SKIP = {".git", "node_modules", "__pycache__", ".pytest_cache", ".ruff_cache",
         ".mypy_cache", "site-packages", "venv", ".venv"}
 
