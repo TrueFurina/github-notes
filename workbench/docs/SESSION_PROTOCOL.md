@@ -151,13 +151,42 @@ python D:/github/_notes/workbench/tools/wsroot.py --where
 
 注册表落在 `workbench/projects.json`（跟真源一起上远端，重置后不丢）。
 
+**根目录漂移收敛器（`fold_root_docs.py`）**——把 §5 的手工流程固定成一条命令：
+
+```bash
+python D:/github/_notes/workbench/tools/fold_root_docs.py           # 默认 dry-run，只出清单
+python D:/github/_notes/workbench/tools/fold_root_docs.py --apply   # 折叠陈旧漂移
+```
+
+- 默认**永不删除**；`--apply` 时逐个校验 md5，不一致立即回滚该文件。
+- 宽限内（并发在制品）默认不动，除非 `--force-live`。
+- **冗余判定**：若根副本的每一行都已在 `workbench/docs/` 同名 canon 里（实测
+  `ROUND_LOG.md` 552KB 是 571KB canon 的子集），则只写
+  `_divergent_root_<date>/_redundant_manifest.txt`（含路径/大小/md5）后移除根副本，
+  **不再往 git 里堆几百 KB 重复 blob**；确需留档用 `--keep-redundant`。
+
+**挂机巡检（`health_check.py`）**——无人值守时的唯一入口：
+
+```bash
+python D:/github/_notes/workbench/tools/health_check.py            # 离线，只读
+python D:/github/_notes/workbench/tools/health_check.py --online   # 额外 fetch 比 ahead/behind
+python D:/github/_notes/workbench/tools/health_check.py --json     # 机器可读
+```
+
+七项：H1 根目录定位 / H2 结构完整（复用 `bootstrap --all --check`）/ H3 守门 /
+H4 根目录卫生（**只对陈旧报警，在制品不算**）/ H5 记忆镜像逐字一致 /
+H6 真源同步（ahead 即「重置会丢」）/ H7 四项自测。rc=0 正常、1 有问题、2 找不到工作区。
+已挂每日定时任务「每日工作区健康巡检（只读）」，**只报告不修复**。
+
 判据：
 - `bootstrap.py --check` 必须 rc=0；
+- `health_check.py` 必须 rc=0（挂机时的唯一体检口径）；
 - 目标项目里 `session_guard.py` 的 `--self-test` 与现场守门都必须通过；
 - 钩子装好后，故意在根目录放一个 `.md` 再 commit，**必须被拦**（装不上等于没装）。
 
-边界：`bootstrap` 只写结构、工具、`.gitignore`、钩子；**不删文件、不 `git add`、
-不 commit、不 push**。真正的收工推送仍走 §3。
+边界：`bootstrap` 只写结构、工具、`.gitignore`、钩子；`fold_root_docs` 只搬移/判冗余
+不删内容；`health_check` 只读。三者都**不 `git add`、不 commit、不 push**。
+真正的收工推送仍走 §3。
 
 ---
 

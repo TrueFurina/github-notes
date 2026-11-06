@@ -27,7 +27,7 @@
 - **双轨**：①差异/往返 fuzz 证明核心没坏；②扫带复现的 open bug（真正产出 PR）。成熟库随机 fuzz 多是**干净负结果**，价值在证明清白，不是拿来开 PR。优先「**源码安全/正确性审计 + 真实用户影响**」而非扫 issue——3 个 merged 与 ludic #151 全来自此。
 - **先跑作者的 `__main__` 自测**，日志首行自相矛盾往往就是 bug。
 - **假阳性规律（最重要）**：每次「发现 bug」先问「是不是我 oracle 写错了」（累计十余次）。判据必须落在**目标函数体内用 AST**；字符串命中不算语义；守卫函数体内的合法写法不算残留；文档里的 `ghp_`/`AKIA` 前缀是说明文字不是泄露。
-- **高命中漏洞模式**（每条详见总纲，含 commit 号）：验签是否绑定载荷（`597cabe`）；兄弟实现是否同步修复（`4760fa9`）；跨仓同源代码修复不自动传播（`eb74b0a`）；`get(k,0)` 的 0 当哨兵参与数值比较（`7caa0d8`）；`max(lo,min(hi,x))` 非 NaN-safe（`8ba090c`）；累加器接收非有限值永久中毒；电报自报 ID 做去重键可绕过（含枚举归一坑）；强制质量门误报比漏报更糟；机验脚本对语料列有隐含契约；**按内容挑分隔符**启发式必被击穿（ludic #151，文本与属性是两个转义上下文）；**下标变换漏标 `PRE_COMPUTE`**（PyFunctional `zip_with_next` #219：串行引擎对无 `PRE_COMPUTE` 的变换喂裸迭代器，`sequence[1:]`/`sequence[:-1]`/`sequence[i:]` 下标必崩；兄弟 `init`/`inits`/`tails`/`sliding`/`reverse` 已标，新增/漏改的同族函数必查）。
+- **高命中漏洞模式**（详见总纲，含 commit/PR）：验签未绑定载荷 `597cabe`；兄弟实现漏同步 `4760fa9`；跨仓同源修复不传播 `eb74b0a`；`get(k,0)` 哨兵参与比较 `7caa0d8`；`max(lo,min(hi,x))` 非 NaN-safe `8ba090c`；累加器收非有限值永久中毒；自报 ID 做去重键可绕过；强制门误报比漏报更糟；**按内容挑分隔符**必被击穿（ludic #151）；**变换漏标 `PRE_COMPUTE`**（PyFunctional #219：下标类 `sequence[1:]` 必崩，同族新函数必查）。
 - **判重三连**：issue 列表 + open PR + **closed PR / issue timeline**；三条件=同文件+同函数+同语义，必须 diff 补丁。Box 证明「open PR 少」≠「没人做过」，babel 证明「issue 漂亮」≠「没被抢」。
 
 ## 选靶与政策（详见总纲 §选靶与政策）
@@ -50,6 +50,8 @@
 | 开工 | `session_start.py` | 领 `sessions/<ID>/`、拉真源、跑守门 |
 | 自举 | `bootstrap.py` | **任意项目**装/自愈（目录+工具+git+.gitignore+钩子+自测）；`--check` 只读巡检、`--all` 多项目、`--register` 登记；幂等、不 commit/push |
 | 定位 | `wsroot.py` | 根目录解析（参数→`WB_WORKSPACE`→工具位置上溯→CWD）；`--where` 查「到底认哪个目录」 |
+| 漂移 | `fold_root_docs.py` | 根目录 .md 收敛：默认 dry-run；`--apply` 搬移并校验 md5；**冗余判定**（根副本是 docs 子集时只记 manifest 不入库，省大 blob） |
+| 巡检 | `health_check.py`（7 项） | 挂机唯一入口：定位/结构/守门/根卫生/镜像/同步/自测；`--online` 比 ahead-behind、`--json`；**只读**，已挂每日定时任务 |
 | 收工 | `close_out.py` | 唯一收工闸：守门/去重/体检/代码层漂移/跨仓核查/G5；除守门均不阻断、**默认离线** |
 | 守门 | `session_guard.py` + 钩子 | 已装 `.git/hooks/pre-commit`：G1 单真源 / **G2 根无 .md（5 分钟宽限内视为并发在制品，只告警）** / G3 `_bt_*` 告警 / **G4 暂存区凭据阻断** |
 | 选靶 | `scout_targets.py`（34 例） | 三信号 + AI_BAN 否决；`--audit-existing`、`--preflight` |
@@ -60,12 +62,12 @@
 ## 环境事实（每次新会话必读）
 - ★ **一切本地快照都过期**：本地 clone 改文件前先 GET 远端原文→精确替换→断言 `count==1`→再推；**会话注入的工作记忆同样过期**（11-06 注入仍写「6 PR 全 open」，磁盘已是 12 个）；`codeload` tar.gz 有 CDN 缓存，核验走 Contents API。决策前先读磁盘 `.workbuddy-ai/memory/` 或 `_notes/memory/`。
 - ★ **并发会话会整文件覆盖 memory 副本**：两边 md5 仍一致，md5 校验发现不了内容回退。按 §4 用 `Edit` 精确重打补丁；**改前后比对关键段落，提交前 `git show HEAD:文件 | grep 关键句`**。真源文档也会过期：历史记录加「现状更正」块，现行清单直接改。
-- ★ **本机挂机 + 关机即重置 → 「装过一次」的东西都会没**：`.git/hooks/` 不受版本控制。恢复只跑 `python _notes/workbench/tools/bootstrap.py`（幂等、无交互、不 commit/push）；巡检 `--check`，多项目 `--all --check`（注册表 `workbench/projects.json` 随真源上远端，重置不丢）。根目录靠 `wsroot.py` 解析（参数→`WB_WORKSPACE`→工具位置上溯→CWD），**已不硬编码 `D:/github`**；给新项目装用 `--workspace E:/projX`。实测 `D:/_wb_demo` 全新项目自举后，G2/G4 负例与 pre-commit 钩子全部按预期阻断。
+- ★ **挂机 + 关机即重置 → 「装过一次」的东西都会没**：`.git/hooks/` 不在版本控制里，恢复只跑 `bootstrap.py`（幂等、不 commit/push）；巡检 `health_check.py`（7 项，rc=0 才算好）；多项目 `--all`（注册表 `workbench/projects.json` 随真源上远端）。根目录靠 `wsroot.py` 解析，**已不硬编码**；新项目用 `--workspace E:/projX`。
 - ★ **守门不能把「正在写」当「漂移」**：并发会话实时追加根目录报告时（11-06 实测 `_r81_entry.md` mtime 仅 1.5 分钟），搬走会截断对方写入、且两会话互锁。`session_guard` G2 按 mtime 分流——宽限（默认 5 分钟，`WB_GUARD_GRACE_MIN`）内只告警不阻断，超时才判陈旧漂移。**通用原则：任何「自动搬移/清理」的闸门都必须先区分在制品与陈旧物，否则多会话并行时会互相破坏。**
 - `git` 可用（`/mingw64/bin/git`），常规 `fetch`→`rebase`→`push`，**不得 `--force`**。`github.com` 偶发 502 / `Empty reply` / `schannel` 握手失败 → 加 `-c http.version=HTTP/1.1` 可通；重试仍不通 → REST Contents API PUT / Git Data API 兜底（`api.github.com` 走不同路由），随后 fetch+rebase 零丢失收敛。
 - API 429 → 重试+退避 + 中文路径 `urllib.parse.quote`；5xx 也需退避；后台任务跨调用会被回收，长跑前台分批；后台 pytest 用 `--basetemp` 指到工作区内目录避免沙箱卡住。
 - ★ **凭据审计（11-05，勿重复恐慌）**：`github-notes` 105 个历史提交 + 当前树**均无真实凭据**；全工作区 90792 文本文件的 28 处命中全是假阳性（AWS 教学示例、字母表占位符、Pillow 内嵌 base64 二进制）。11-05 曾有真实 `gho_` token 落在并发巡检产物，提交前已脱敏、**从未进 git 历史**（仍建议轮换）。`.gitignore` 已含 `workbench/docs/_mp_*.txt`。
-- 环境：`_sdk_env/Scripts/python.exe`（3.12，ruff 已装），系统 python 3.13。免 git 克隆 `curl -sL -o x.tgz https://codeload.github.com/<owner>/<repo>/tar.gz/refs/heads/<branch>`。库要求 Python ≥3.14 时注入 inert stub `sys.modules['string.templatelib']`；本地 `from __future__ import annotations` 垫片**绝不能推上游**，PR 须注明「未跑完整 pytest」。
+- 环境：`_sdk_env/Scripts/python.exe`（3.12，ruff 已装），系统 3.13。免 git 克隆 `codeload.github.com/<o>/<r>/tar.gz/refs/heads/<br>`。库要求 ≥3.14 时注入 stub `sys.modules['string.templatelib']`；`from __future__ import annotations` 垫片**绝不能推上游**，PR 注明「未跑完整 pytest」。
 
 ## 可复用本地环境
 - reader：`D:/github/_reader/src`（`pip install -e .`），**1713 passed / 499 skipped / 2 xfailed**；fork `D:/github/_reader_pr`。
