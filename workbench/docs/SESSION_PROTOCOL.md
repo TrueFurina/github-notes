@@ -201,6 +201,38 @@ python D:/github/_notes/workbench/tools/bootstrap.py --unregister E:/projX
 
 ---
 
+## 7. 冷启动（2026-11-06）
+
+**§6 的自愈链有一个断点**：`bootstrap.py` 躺在 `_notes/workbench/tools/` 里，
+机器一重置 `_notes` 整个没了，自愈脚本自己也没了 —— 「一条命令恢复」在最需要它的
+那天跑不起来。补上起点：`cold_start.py`，只依赖标准库 + 网络，不读本地任何文件。
+
+```bash
+# 真源还在（只是钩子/工具丢了）→ 不需要冷启动
+python D:/github/_notes/workbench/tools/bootstrap.py
+
+# 真源没了 → 一行命令从 GitHub 拉回（仓库公开，无需 token）
+python -c "import urllib.request,json,base64;u='https://api.github.com/repos/TrueFurina/github-notes/contents/workbench/tools/cold_start.py';d=json.load(urllib.request.urlopen(urllib.request.Request(u,headers={'User-Agent':'x'})));exec(base64.b64decode(d['content']).decode())"
+
+# 换机器 / 换盘符
+python cold_start.py --workspace E:/projX [--notes _kb] [--check]
+```
+
+它做四件事：下载 `codeload` tarball（不走 git，代理下更稳）→ 解包剥顶层 →
+落位 → 跑 `bootstrap.py` → **绑定 `origin`**（否则能自愈却不能推回真源）。
+
+安全边界：先解到临时目录、成功才落位（不留半成品）；已存在但不完整则**改名让位不删除**；
+逐条校验路径防穿越；不写凭据到磁盘。
+
+判据（实测通过）：
+- 空工作区冷启动 → 8 项巡检全绿；
+- 删掉 `.git/hooks/pre-commit` 后 `health_check` **H2 变红**，`bootstrap.py` 一条命令恢复；
+- 恢复后 H6 显示「尚无提交（跳过）」属正常（tarball + git init 无历史）。
+
+详见 `workbench/docs/冷启动恢复-一条命令.md`。
+
+---
+
 ## 三条可复用的（如果只记三句）
 
 1. **一台机器跑多个会话，知识库必须只有一个。** 第二个笔记叉出现的一刻，漂移就开始了。

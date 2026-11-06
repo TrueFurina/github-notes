@@ -239,8 +239,15 @@ def check_tool_freshness(entries: list[dict]) -> dict:
             stale.append(f"{ws.name}: 无 tools")
             continue
         missing = [n for n in canonical if not (tools / n).is_file()]
+        # 必须按归一化行尾比较：tarball 解出是 LF、Windows 工作树常是 CRLF，
+        # 逐字节比会把整批文件误判为「旧」（冷启动实测踩到）。
+        def norm(p: pathlib.Path) -> bytes:
+            try:
+                return p.read_bytes().replace(b"\r\n", b"\n")
+            except OSError:
+                return b""
         outdated = [n for n, src in canonical.items()
-                    if (tools / n).is_file() and (tools / n).read_bytes() != src.read_bytes()]
+                    if (tools / n).is_file() and norm(tools / n) != norm(src)]
         if missing:
             stale.append(f"{ws.name}: 缺 {len(missing)} 个")
         if outdated:

@@ -49,6 +49,7 @@
 |---|---|---|
 | 开工 | `session_start.py` | 领 `sessions/<ID>/`、拉真源、跑守门 |
 | 自举 | `bootstrap.py` | **任意项目**装/自愈（目录+工具+git+.gitignore+钩子+自测）；`--check` 只读巡检、`--all`/`--force` 多项目同步、`--register`/`--unregister`/`--list` 维护注册表；幂等、不 commit/push |
+| 冷启动 | `cold_start.py` | **真源没了时的起点**：codeload 拉 tarball（匿名、不走 git）→ 剥顶层落位 → bootstrap → **绑 origin**；只依赖标准库，先解临时目录再落位 |
 | 定位 | `wsroot.py` | 根目录解析（参数→`WB_WORKSPACE`→工具位置上溯→CWD）；`--where` 查「到底认哪个目录」 |
 | 漂移 | `fold_root_docs.py` | 根目录 .md 收敛：默认 dry-run；`--apply` 搬移并校验 md5；**冗余判定**（根副本是 docs 子集时只记 manifest 不入库，省大 blob） |
 | 巡检 | `health_check.py`（8 项） | 挂机唯一入口：定位/结构/守门/根卫生/镜像/同步/自测/**工具新鲜度 H8**；`--all` 汇总多项目、`--online`、`--json`；**只读**，已挂每日定时任务 |
@@ -70,6 +71,5 @@
 - 环境：`_sdk_env/Scripts/python.exe`（3.12，ruff 已装），系统 3.13。免 git 克隆 `codeload.github.com/<o>/<r>/tar.gz/refs/heads/<br>`。库要求 ≥3.14 时注入 stub `sys.modules['string.templatelib']`；`from __future__ import annotations` 垫片**绝不能推上游**，PR 注明「未跑完整 pytest」。
 
 ## 可复用本地环境
-- reader：`D:/github/_reader/src`（`pip install -e .`），**1713 passed / 499 skipped / 2 xfailed**；fork `D:/github/_reader_pr`。
-- agent-memory：PEP 420 命名空间包，core+adapters 合并成一目录才能跑；#118=14/#119=8/#120=5 passed。
-- 手册/地图：`上游贡献手册.md`、`GitHub-探索与贡献地图-2026-10-31.md`、`深度复盘-上游贡献实战与红海洞察-2026-11-01.md`。
+- `_reader/src`（`pip install -e .`，1713 passed）；`_reader_pr` 为 fork。agent-memory 是 PEP 420 命名空间包，core+adapters 需合并成一目录才能跑。
+- 手册/地图：`上游贡献手册.md`、`GitHub-探索与贡献地图-2026-10-31.md`、`深度复盘-上游贡献实战与红海洞察-2026-11-01.md`；方法细节见 `workbench/docs/方法论与选靶总纲-2026-11-05.md`。

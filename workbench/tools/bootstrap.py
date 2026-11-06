@@ -140,6 +140,14 @@ def ensure_dirs(notes: pathlib.Path, dry: bool) -> list[str]:
     return made
 
 
+def _norm(p: pathlib.Path) -> bytes:
+    """按归一化行尾读：Windows 工作树是 CRLF、tarball 解出是 LF，逐字节比会永远「不相等」。"""
+    try:
+        return p.read_bytes().replace(b"\r\n", b"\n")
+    except OSError:
+        return b""
+
+
 def sync_tools(notes: pathlib.Path, dry: bool, force: bool) -> tuple[list[str], list[str]]:
     dst_dir = notes / "workbench" / "tools"
     added, updated = [], []
@@ -155,7 +163,7 @@ def sync_tools(notes: pathlib.Path, dry: bool, force: bool) -> tuple[list[str], 
             added.append(src.name)
             if not dry:
                 shutil.copy2(src, dst)
-        elif force and src.read_bytes() != dst.read_bytes():
+        elif force and _norm(src) != _norm(dst):
             updated.append(src.name)
             if not dry:
                 shutil.copy2(src, dst)
