@@ -126,7 +126,7 @@ def main() -> int:
         return guard_rc
     print("✓ notes 守门通过。其余各项为提示，不阻断收工。")
     print("  收工两条通道：")
-    print("    A  git -C D:/github/_notes add -A && commit && push   （pre-commit 钩子兜底）")
+    print(f"    A  git -C {wsroot.notes_root().as_posix()} add -A && commit && push   （pre-commit 钩子兜底）")
     print("    B  python gh_push.py ... --guard-from work-repo.base   （改了 work-repo 才需要）")
     print(SEP)
     return 0
