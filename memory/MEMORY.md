@@ -9,7 +9,7 @@
 - 用户口径：**先做好自己的事，不催 maintainer**；真 bug 就干净地修、带测试、开 PR、然后等。**质量与诚实 > 数量与合并率，不硬凑**（红海撞车或需设计决策一律放弃）。
 - 学校机器关机即重置 → 结论/产物**先推 `TrueFurina/github-notes` 再落本机**；本机 `.workbuddy-ai/memory/` 逐字备份在 `github-notes/memory/`。
 
-## 已开 PR（12 个；11-06 复核：3 merged / 1 判重关闭 / 1 AI 政策关闭 / 7 open 等 CI，本场不催）
+## 已开 PR（13 个；11-06 复核：3 merged / 1 判重关闭 / 1 AI 政策关闭 / 8 open 等 CI，本场不催）
 | 仓库 | PR | 内容 | 状态 |
 |---|---|---|---|
 | tigerless-labs/agent-memory | #118/#119/#120 | 凭据漏拦 / 围栏标题 / frontmatter 注入 | **merged** 11-03 |
@@ -21,12 +21,13 @@
 | alecthomas/voluptuous | #569 | `Object` 遇 dict 输入静默丢数据 + required=True 假报错 | open（11-05）183 PASSED，等 CI/merge |
 | makinacorpus/easydict | #54 | `update()` 遇「位置 dict + 关键字」时静默改写调用方入参 | open（11-06）64 doctest PASSED，等 CI/merge |
 | python-constraint/python-constraint | #116 | VariableMin/MaxSumConstraint 乘数估计写 `domains[var]*multiplier`（列表重复）→ float 崩溃 + 整型漏解 | open（11-06）测例 10 passed（229 套件无回归），等 CI/merge |
+| EntilZha/PyFunctional | #219 | `zip_with_next` 漏标 `PRE_COMPUTE` → 经 `map`/`filter` 等惰性变换后链式调用 `sequence[1:]` 对迭代器下标 → `TypeError` | open（11-06）回归测 +20 行（串行/并行），全套 311 passed / 3 skipped，等 CI/merge |
 
 ## 找 bug（详见总纲 §找 bug / §高命中漏洞模式）
 - **双轨**：①差异/往返 fuzz 证明核心没坏；②扫带复现的 open bug（真正产出 PR）。成熟库随机 fuzz 多是**干净负结果**，价值在证明清白，不是拿来开 PR。优先「**源码安全/正确性审计 + 真实用户影响**」而非扫 issue——3 个 merged 与 ludic #151 全来自此。
 - **先跑作者的 `__main__` 自测**，日志首行自相矛盾往往就是 bug。
 - **假阳性规律（最重要）**：每次「发现 bug」先问「是不是我 oracle 写错了」（累计十余次）。判据必须落在**目标函数体内用 AST**；字符串命中不算语义；守卫函数体内的合法写法不算残留；文档里的 `ghp_`/`AKIA` 前缀是说明文字不是泄露。
-- **高命中漏洞模式**（每条详见总纲，含 commit 号）：验签是否绑定载荷（`597cabe`）；兄弟实现是否同步修复（`4760fa9`）；跨仓同源代码修复不自动传播（`eb74b0a`）；`get(k,0)` 的 0 当哨兵参与数值比较（`7caa0d8`）；`max(lo,min(hi,x))` 非 NaN-safe（`8ba090c`）；累加器接收非有限值永久中毒；电报自报 ID 做去重键可绕过（含枚举归一坑）；强制质量门误报比漏报更糟；机验脚本对语料列有隐含契约；**按内容挑分隔符**启发式必被击穿（ludic #151，文本与属性是两个转义上下文）。
+- **高命中漏洞模式**（每条详见总纲，含 commit 号）：验签是否绑定载荷（`597cabe`）；兄弟实现是否同步修复（`4760fa9`）；跨仓同源代码修复不自动传播（`eb74b0a`）；`get(k,0)` 的 0 当哨兵参与数值比较（`7caa0d8`）；`max(lo,min(hi,x))` 非 NaN-safe（`8ba090c`）；累加器接收非有限值永久中毒；电报自报 ID 做去重键可绕过（含枚举归一坑）；强制质量门误报比漏报更糟；机验脚本对语料列有隐含契约；**按内容挑分隔符**启发式必被击穿（ludic #151，文本与属性是两个转义上下文）；**下标变换漏标 `PRE_COMPUTE`**（PyFunctional `zip_with_next` #219：串行引擎对无 `PRE_COMPUTE` 的变换喂裸迭代器，`sequence[1:]`/`sequence[:-1]`/`sequence[i:]` 下标必崩；兄弟 `init`/`inits`/`tails`/`sliding`/`reverse` 已标，新增/漏改的同族函数必查）。
 - **判重三连**：issue 列表 + open PR + **closed PR / issue timeline**；三条件=同文件+同函数+同语义，必须 diff 补丁。Box 证明「open PR 少」≠「没人做过」，babel 证明「issue 漂亮」≠「没被抢」。
 
 ## 选靶与政策（详见总纲 §选靶与政策）
