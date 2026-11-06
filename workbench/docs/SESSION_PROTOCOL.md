@@ -169,14 +169,25 @@ python D:/github/_notes/workbench/tools/fold_root_docs.py --apply   # 折叠陈�
 
 ```bash
 python D:/github/_notes/workbench/tools/health_check.py            # 离线，只读
+python D:/github/_notes/workbench/tools/health_check.py --all      # 汇总巡检注册表里所有项目
 python D:/github/_notes/workbench/tools/health_check.py --online   # 额外 fetch 比 ahead/behind
 python D:/github/_notes/workbench/tools/health_check.py --json     # 机器可读
 ```
 
-七项：H1 根目录定位 / H2 结构完整（复用 `bootstrap --all --check`）/ H3 守门 /
+八项：H1 根目录定位 / H2 结构完整（本工作区 `bootstrap --check`）/ H3 守门 /
 H4 根目录卫生（**只对陈旧报警，在制品不算**）/ H5 记忆镜像逐字一致 /
-H6 真源同步（ahead 即「重置会丢」）/ H7 四项自测。rc=0 正常、1 有问题、2 找不到工作区。
-已挂每日定时任务「每日工作区健康巡检（只读）」，**只报告不修复**。
+H6 真源同步（ahead 即「重置会丢」；无 origin 或无提交时跳过）/ H7 四项自测 /
+H8 **工具新鲜度**（注册表里其他项目的工具副本是否落后于本仓——落后会静默用旧判据放行）。
+rc=0 正常、1 有问题、2 找不到工作区。
+已挂每日定时任务「每日工作区健康巡检（只读）」，跑 `--all`，**只报告不修复**。
+
+注册表维护（只改 `projects.json`，不动任何项目文件）：
+
+```bash
+python D:/github/_notes/workbench/tools/bootstrap.py --list
+python D:/github/_notes/workbench/tools/bootstrap.py --register   E:/projX
+python D:/github/_notes/workbench/tools/bootstrap.py --unregister E:/projX
+```
 
 判据：
 - `bootstrap.py --check` 必须 rc=0；

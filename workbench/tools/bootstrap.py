@@ -99,6 +99,33 @@ def register(notes: pathlib.Path, ws: pathlib.Path, notes_name: str) -> str:
     return f"已登记: {key}（共 {len(entries)} 个项目）"
 
 
+def unregister(notes: pathlib.Path, ws: pathlib.Path) -> str:
+    entries = load_registry(notes)
+    key = str(ws.resolve()).replace("\\", "/")
+    kept = [e for e in entries
+            if str(pathlib.Path(e.get("workspace", "")).resolve()).replace("\\", "/") != key]
+    if len(kept) == len(entries):
+        return f"未找到登记: {key}（未改动）"
+    save_registry(notes, kept)
+    return f"已移除登记: {key}（剩 {len(kept)} 个项目）"
+
+
+def list_registry(notes: pathlib.Path) -> str:
+    entries = load_registry(notes)
+    if not entries:
+        return "注册表为空。用 --register <项目路径> 添加。"
+    lines = [f"注册表: {registry_path(notes).as_posix()}（{len(entries)} 个项目）"]
+    for i, e in enumerate(entries, 1):
+        ws = pathlib.Path(e.get("workspace", ""))
+        nm = e.get("notes") or "_notes"
+        exists = ws.is_dir()
+        has_tools = (ws / nm / "workbench" / "tools").is_dir()
+        mark = "✓" if exists and has_tools else "✗"
+        lines.append(f"  {mark} [{i}] {e.get('workspace')}  notes={nm}"
+                     f"  存在={exists} 工具={has_tools}")
+    return "\n".join(lines)
+
+
 # --------------------------------------------------------------------------
 # 单项目自举
 # --------------------------------------------------------------------------
@@ -252,11 +279,22 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--check", action="store_true", help="只体检不写盘；有缺失则 rc=1")
     ap.add_argument("--force", action="store_true", help="同步工具时覆盖目标同名文件")
     ap.add_argument("--register", default=None, help="把某个工作区登记进多项目注册表")
+    ap.add_argument("--unregister", default=None, help="从注册表移除某个工作区（不动任何文件）")
+    ap.add_argument("--list", action="store_true", help="查看注册表（含存在性/工具是否齐备）")
     ap.add_argument("--all", action="store_true", help="对注册表里所有项目执行")
     args = ap.parse_args(argv)
 
     notes_name = args.notes or wsroot.notes_root().name
     base_notes = wsroot.notes_root()
+
+    if args.list:
+        print(list_registry(base_notes))
+        return 0
+
+    if args.unregister:
+        print(unregister(base_notes, pathlib.Path(args.unregister)))
+        print(f"注册表: {registry_path(base_notes).as_posix()}")
+        return 0
 
     if args.register:
         msg = register(base_notes, pathlib.Path(args.register), notes_name)
