@@ -151,6 +151,26 @@ python D:/github/_notes/workbench/tools/wsroot.py --where
 
 注册表落在 `workbench/projects.json`（跟真源一起上远端，重置后不丢）。
 
+**仓内冗余清理（`prune_redundant.py`）**——真源被并发会话反复追加，同一份日志会出现
+8 个副本；工具只删**可证明**无独有内容的：
+
+```bash
+python D:/github/_notes/workbench/tools/prune_redundant.py            # dry-run
+python D:/github/_notes/workbench/tools/prune_redundant.py --apply    # 执行
+```
+
+- **R1 字节完全相同**（md5 相等）：留 1 份；
+- **R2 行集合是 canon 的严格子集**：同名文件里某份每行都在更全的那份里 → 删；
+- 其余一律保留（哪怕看起来像），**永不删唯一副本**；
+- 硬保护：`memory/`、`workbench/tools/`、`workbench/work-repo/`、任何嵌套 git 仓；
+- 删除前写 `workbench/docs/_prune_manifest_<date>.txt`，内容仍在 git 历史可恢复。
+
+**实测收益（2026-11-06）**：工作树 40M→26M，冷启动 tarball **19.6MB→8.2MB（-58%）**。
+一次清掉：4 份相同 zip（留 1）、7 份 ROUND_LOG 子集、嵌套 `_notes/` 副本。
+
+> ⚠ 反例（别再踩）：`github-workbench-2026-11-01.zip` **不是冗余** —— 393 个文件里
+> 370 个仓内没有，是 11-01 的唯一快照。**判冗余必须查内容，不能看名字/大小/份数。**
+
 **根目录漂移收敛器（`fold_root_docs.py`）**——把 §5 的手工流程固定成一条命令：
 
 ```bash

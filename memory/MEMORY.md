@@ -51,6 +51,7 @@
 | 自举 | `bootstrap.py` | **任意项目**装/自愈（目录+工具+git+.gitignore+钩子+自测）；`--check` 只读巡检、`--all`/`--force` 多项目同步、`--register`/`--unregister`/`--list` 维护注册表；幂等、不 commit/push |
 | 冷启动 | `cold_start.py` | **真源没了时的起点**：codeload 拉 tarball（匿名、不走 git）→ 剥顶层落位 → bootstrap → **绑 origin**；只依赖标准库，先解临时目录再落位 |
 | 定位 | `wsroot.py` | 根目录解析（参数→`WB_WORKSPACE`→工具位置上溯→CWD）；`--where` 查「到底认哪个目录」 |
+| 瘦身 | `prune_redundant.py` | 只删可证明冗余（R1 字节相同 / R2 行集是 canon 子集）；保护 `memory/`·`tools/`·`work-repo/`·嵌套 git 仓；实测 40M→26M、tarball 19.6→8.2MB |
 | 漂移 | `fold_root_docs.py` | 根目录 .md 收敛：默认 dry-run；`--apply` 搬移并校验 md5；**冗余判定**（根副本是 docs 子集时只记 manifest 不入库，省大 blob） |
 | 巡检 | `health_check.py`（8 项） | 挂机唯一入口：定位/结构/守门/根卫生/镜像/同步/自测/**工具新鲜度 H8**；`--all` 汇总多项目、`--online`、`--json`；**只读**，已挂每日定时任务 |
 | 收工 | `close_out.py` | 唯一收工闸：守门/去重/体检/代码层漂移/跨仓核查/G5；除守门均不阻断、**默认离线** |
