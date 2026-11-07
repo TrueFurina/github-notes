@@ -1,0 +1,7 @@
+{
+  "pr_num": 648,
+  "pr_url": "https://github.com/jsonpickle/jsonpickle/pull/648",
+  "branch": "fix/slots-with-dict",
+  "commit1": "5f32d09a86f3a251511b70ea3d255824fc988380",
+  "commit2": "9b126788dfe37adecc9f3043ea4da5e9e23ecb71"
+}
