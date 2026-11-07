@@ -1157,3 +1157,12 @@ ruff `All checks passed`，与 R55 改后基线 `diff` 空；行尾 CRLF=0 / 185
 值守核验 R51：成对OK shaOK 远端较新OK
 
 ---end 值守 2026-11-05 23:27---
+
+## R93 · 2026-11-07 22:58（续记；R88–R92 详细条目见私有笔记仓库 physics-scheduler-notes，本地根 ROUND_LOG_续2.md 被环境周期性清理移除）
+
+- 根因：master_store.load() 命中版本过旧落盘时只 print，与"文件不存在"混同 —— 用户持久化主数据在 schema 升级时被静默作废，编辑消失且无提示（R88/R92 同族主数据降级最后一处）。
+- 修法：master_store 加 `_LAST_VERSION_MISMATCH` 标记机制（与 `_LAST_CORRUPT` 同范式：标记而非改返回值类型，不动 `if store:` 契约）；恢复路径据此经 `_note_master_restore_loss` 在 `/master/overview` 附 `restored:false`+warning 报"旧版本格式已作废"。**不删文件**（守硬性禁令）。
+- 4 文件 +49/−0（master_store.py 加标记+import；reschedule.py 恢复路径加 `elif` 版本判断；test_master_restore_warning.py 加 3 测；mutation_check.py 加 M117/M118）。
+- 验证：后端 971/32/0（**test_solve_all_is_reproducible 为既有 flaky，单独连跑 2/3 失败，与 R93 无关**）；ruff 全量 0；变异 118/118（M117/M118 均 KILLED）；reschedule.py 纯 CRLF（2258 行）未破。
+- 插曲：① 重构误删 M44 锚点所在的 `if store is None and consume_corrupt_flag():` 原行 → 已恢复（版本判断改 `elif`，保留 M44 守卫）；② ruff 全量 lint 抓到未导入的 `SCHEMA_VERSION` → 改 `master_store.SCHEMA_VERSION`；③ M118 锚点缩进 20→16 空格对齐实际行；④ 误用脚本把 mutation_check.py 翻成 CRLF → 还原 LF 并补推 `c0cd8c32b2`。
+- 代码 `42fad760e6`（父 `ec0d16d0b9`），LF 还原 `c0cd8c32b2`。全程只读+仅追加，未删任何文件。
