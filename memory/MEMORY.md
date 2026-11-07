@@ -28,9 +28,10 @@
 - **双轨**：①差异/往返 fuzz 证明核心没坏；②扫带复现的 open bug（真正产出 PR）。成熟库随机 fuzz 多是**干净负结果**，价值在证明清白，不是拿来开 PR。优先「**源码安全/正确性审计 + 真实用户影响**」而非扫 issue——3 个 merged 与 ludic #151 全来自此。
 - **先跑作者的 `__main__` 自测**，日志首行自相矛盾往往就是 bug。
 - **假阳性规律（最重要）**：每次「发现 bug」先问「是不是我 oracle 写错了」（累计十余次）。判据必须落在**目标函数体内用 AST**；字符串命中不算语义；守卫函数体内的合法写法不算残留；文档里的 `ghp_`/`AKIA` 前缀是说明文字不是泄露。**本轮两个新坑**：①`count`-类 API 可能只收 bool（数 0/1 位）而非子串搜索——按子串建 oracle 必误判；②find/split 的 oracle 边界：针必须完整落在 [start,end) 内（合法首位=end-n），且 split 用 `str(p)` 比对会因 bitstring 自动 hex/bin 显示（`0x8`→`'8'`）串味。**统一改用 `.bin` 属性 / 合法边界公式做 oracle**。
-- **干净审计台账（不硬凑放弃）**：tldextract（170k PSL 差分 0 发散）、bitstring 5.0（slice 40k + 取值 180k + find 族 40k + Array.count 20k + split 30k 全 0 发散，tibs C 核心）。
+- **干净审计台账（不硬凑放弃）**：tldextract（170k PSL 差分 0 发散）、bitstring 5.0（slice 40k + 取值 180k + find 族 40k + Array.count 20k + split 30k 全 0 发散，tibs C 核心）、PyYAML（纯 Python lib/yaml：20k 生成结构往返幂等 0 发散 + 锚点/别名 + 多文档 + 危险标量 + 畸形输入健壮性全 OK）。
+- **判重命中台账（放弃，不硬凑）**：wsproto #182（close 用 local-only code 1006/1015 被静默改写成 1000）——真 bug 已验证、修复+测试+ruff 全过，但 open PR #200/#183 已用相同改法修（raise 而非静默改 1000），判定重复→放弃；ftfy #236（`utf8_variants.py` 正则 `$` 吞结尾 `\n`→错误解码 `b"\xc0\n"`→`'\x00'`、5 字节 CESU-8→`'😊'`）——真 bug，但 open PR #237(2026-10) 已用 `$`→`\Z` 同改法修（同文件同语义），重复放弃；ftfy #222（字符串**开头**漏检 `Ã¥`→`å` mojibake，加前导空格即修）——真 bug 已复现，但 open PR #232(2026-08) 已用同根因（`is_bad()` 缺开头模式）修、含同例测试，重复放弃。**连续 3 次撞 open PR → 中等热度库(300–4k★)的明显 bug 基本已被占，改向 closed-without-fix / 未上报 bug / 更 niche(<1k★)**。
 - **高命中漏洞模式**（详见总纲，含 commit/PR）：验签未绑定载荷 `597cabe`；兄弟实现漏同步 `4760fa9`；跨仓同源修复不传播 `eb74b0a`；`get(k,0)` 哨兵参与比较 `7caa0d8`；`max(lo,min(hi,x))` 非 NaN-safe `8ba090c`；累加器收非有限值永久中毒；自报 ID 做去重键可绕过；强制门误报比漏报更糟；**按内容挑分隔符**必被击穿（ludic #151）；**变换漏标 `PRE_COMPUTE`**（PyFunctional #219：下标类 `sequence[1:]` 必崩，同族新函数必查）；**`__dict__` 与 `__slots__` 共存**（jsonpickle #648：pickler 只平铺其一→slot 静默丢失，需沿 MRO 双平铺）。
-- **判重三连**：issue 列表 + open PR + **closed PR / issue timeline**；三条件=同文件+同函数+同语义，必须 diff 补丁。Box 证明「open PR 少」≠「没人做过」，babel 证明「issue 漂亮」≠「没被抢」。
+- **判重三连**：issue 列表 + open PR + **closed PR / issue timeline**；三条件=同文件+同函数+同语义，必须 diff 补丁。Box 证明「open PR 少」≠「没人做过」，babel 证明「issue 漂亮」≠「没被抢」。**wsproto #182 实战补强**：open PR 不能只数个数，必须读**内容**——#182 的 local-only close code 静默改 1000 已被 open PR #200(2026-04,raise LocalProtocolError)/#183(2023,ValueError) 同函数同语义修掉，判重命中→放弃，绝不重复开 PR。
 
 ## 选靶与政策（详见总纲 §选靶与政策）
 - **三信号缺一不可**：openPR 低 + 明确接受外部 PR + 纯逻辑可离线复现。**低 openPR 只是「值得去读政策」的提示**：三种成因=拒外部贡献（openai-agents-python / python-socketio）、维护者合并极快（Box）、主动清理 agent PR（tinycss2）。反例 `getludic/ludic`（0 PR 但明确欢迎）。**决定性变量是 CONTRIBUTING 原文，不是 PR 数**。
@@ -38,6 +39,7 @@
 - **AI 贡献禁令比拥挤度更前置**，必须**选靶阶段一票否决**（`AI_BAN→EXCLUDE`）；事后复核只能提前知道，不能挽回。
 - **第四类假靶**：maintainer 只接受特定类型修复（`tkem/cachetools` 拒「用户输入错误」类、收「库自身状态损坏」类）→ 必须读 PR/issue 的**关闭评论**判断口味。
 - **红海**：热门纯 Python 库小修窗口被 agent 洪流淹没；AI 生态更卷（agno 989 / livekit 635…）。**全局排序搜索已被模板生成仓污染**，须从可信库清单 + 结构化 `/repos/X/issues?labels=bug` 出发。
+- **连续判重命中校准（11-07，3 连击）**：wsproto #182→#200/#183、ftfy #236→#237、ftfy #222→#232 全是「open issue 但已有关联 open PR」。中等热度库（300–4k★）的明显 bug 基本已被占。**改向**：①优先 **closed-without-fix** issue（jsonpickle #306 成功路径）；②用差异/往返 fuzz 找**未上报** bug（jsonpickle 也是 fuzz 出的，无 PR；PyYAML fuzz 全 0 发散=clean audit，印证成熟库随机 fuzz 多负结果）；③更 niche（<1k★）。**不再对「open issue 且已有关联 PR」的靶投入**。下一靶走 msgpack：C 扩展 vs 纯 Python fallback 差异测试（fallback 是次级实现、历史有 bug、更易出未上报 bug）。
 - 落点：关闭型仓发 issue 级 root-cause 分析（openai #5475）、自有 AI 仓变资产（comment-distillery `9a2619d`）、<5k star niche 库。
 
 ## reader #429 结案（合规口径）
