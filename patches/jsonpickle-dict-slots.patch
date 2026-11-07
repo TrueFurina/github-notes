@@ -1,0 +1,98 @@
+==== jsonpickle/pickler.py (31 diff lines) ====
+--- a/jsonpickle/pickler.py
++++ b/jsonpickle/pickler.py
+@@ -574,7 +574,7 @@
+         data: dict[str, Any] = {}
+         has_class = hasattr(obj, "__class__")
+         has_dict = hasattr(obj, "__dict__")
+-        has_slots = not has_dict and hasattr(obj, "__slots__")
++        has_slots = hasattr(obj, "__slots__")
+         has_getnewargs = util.has_method(obj, "__getnewargs__")
+         has_getnewargs_ex = util.has_method(obj, "__getnewargs_ex__")
+         has_getinitargs = util.has_method(obj, "__getinitargs__")
+@@ -724,7 +724,18 @@
+ 
+             # hack for zope persistent objects; this unghostifies the object
+             getattr(obj, "_", None)
+-            return self._flatten_dict_obj(obj.__dict__, data, exclude=exclude)
++            data = self._flatten_dict_obj(obj.__dict__, data, exclude=exclude)
++            if has_slots:
++                # An object may have both __dict__ and __slots__ (a slot defined
++                # alongside a dynamic instance dict). Flatten the __slots__
++                # attributes as well, otherwise they are silently lost on
++                # round-trip. They are restored as ordinary attributes.
++                allslots = [
++                    _wrap_string_slot(getattr(cls, "__slots__", ()))
++                    for cls in obj.__class__.mro()
++                ]
++                self._flatten_obj_attrs(obj, chain(*allslots), data, exclude)
++            return data
+ 
+         if has_slots:
+             return self._flatten_newstyle_with_slots(obj, data, exclude=exclude)
+
+==== tests/object_test.py (63 diff lines) ====
+--- a/tests/object_test.py
++++ b/tests/object_test.py
+@@ -160,6 +160,29 @@
+ 
+     def __init__(self, a, b):
+         self.ab = a + b
++
++
++class ThingWithDict:
++    def __init__(self, a, b):
++        self.a = a
++        self.b = b
++
++
++class ThingWithDictAndSlot(ThingWithDict):
++    __slots__ = ("s",)
++
++    def __init__(self, a, b, s):
++        super().__init__(a, b)
++        self.s = s
++
++
++class ThingWithExplicitDictSlot:
++    # Explicitly mixing a dynamic instance dict with a slot via __slots__.
++    __slots__ = ("__dict__", "s")
++
++    def __init__(self, d, s):
++        self.__dict__.update(d)
++        self.s = s
+ 
+ 
+ class ThingWithSelfAsDefaultFactory(collections.defaultdict):
+@@ -1101,6 +1124,30 @@
+     assert newobj.ab == "ab"
+ 
+ 
++def test_newstyleslots_with_dict():
++    """Serialize an object that has both __dict__ and __slots__.
++
++    Regression test: the pickler previously only flattened either the
++    __dict__ or the __slots__, so a slot defined alongside a dynamic
++    instance dict was silently dropped on round-trip.
++    """
++    obj = ThingWithDictAndSlot(1, "two", 3)
++    newobj = jsonpickle.decode(jsonpickle.encode(obj))
++    assert newobj.a == 1
++    assert newobj.b == "two"
++    assert newobj.s == 3
++    # inherited __dict__ entries survive too
++    assert newobj.__dict__ == {"a": 1, "b": "two"}
++
++
++def test_newstyleslots_explicit_dict_slot():
++    """Serialize an object with __slots__ that also includes __dict__."""
++    obj = ThingWithExplicitDictSlot({"k0": 35, "k1": "hi"}, 50)
++    newobj = jsonpickle.decode(jsonpickle.encode(obj))
++    assert newobj.s == 50
++    assert newobj.__dict__ == {"k0": 35, "k1": "hi"}
++
++
+ def test_enum34_nested():
+     """Serialize enums as nested member variables in an object"""
+     ec = EnumClass()
+
