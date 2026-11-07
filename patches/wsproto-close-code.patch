@@ -1,0 +1,31 @@
+--- a/src/wsproto/frame_protocol.py
++++ b/src/wsproto/frame_protocol.py
+@@ -594,7 +594,12 @@
+             msg = "cannot specify a reason without a code"
+             raise TypeError(msg)
+         if code in LOCAL_ONLY_CLOSE_REASONS:
+-            code = CloseReason.NORMAL_CLOSURE
++            msg = (
++                f"cannot send a local-only close code ({code}); these codes are "
++                "reserved and MUST NOT be set as a status code in a Close "
++                "control frame"
++            )
++            raise TypeError(msg)
+         if code is not None:
+             payload += bytearray(struct.pack("!H", code))
+             if reason is not None:
+--- a/tests/test_frame_protocol.py
++++ b/tests/test_frame_protocol.py
+@@ -1049,8 +1049,10 @@
+ 
+     def test_local_only_close_reason(self) -> None:
+         proto = fp.FrameProtocol(client=False, extensions=[])
+-        data = proto.close(code=fp.CloseReason.ABNORMAL_CLOSURE)
+-        assert data == b"\x88\x02\x03\xe8"
++        with pytest.raises(TypeError):
++            proto.close(code=fp.CloseReason.ABNORMAL_CLOSURE)
++        with pytest.raises(TypeError):
++            proto.close(code=fp.CloseReason.TLS_HANDSHAKE_FAILED)
+ 
+     def test_ping_without_payload(self) -> None:
+         proto = fp.FrameProtocol(client=False, extensions=[])
