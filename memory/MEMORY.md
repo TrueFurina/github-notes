@@ -9,7 +9,7 @@
 - 用户口径：**先做好自己的事，不催 maintainer**；真 bug 就干净地修、带测试、开 PR、然后等。**质量与诚实 > 数量与合并率，不硬凑**（红海撞车或需设计决策一律放弃）。
 - 学校机器关机即重置 → 结论/产物**先推 `TrueFurina/github-notes` 再落本机**；本机 `.workbuddy-ai/memory/` 逐字备份在 `github-notes/memory/`。
 
-## 已开 PR（13 个；11-06 复核：3 merged / 1 判重关闭 / 1 AI 政策关闭 / 8 open 等 CI，本场不催）
+## 已开 PR（14 个；11-07 复核：3 merged / 1 判重关闭 / 1 AI 政策关闭 / 9 open 等 CI，本场不催）
 | 仓库 | PR | 内容 | 状态 |
 |---|---|---|---|
 | tigerless-labs/agent-memory | #118/#119/#120 | 凭据漏拦 / 围栏标题 / frontmatter 注入 | **merged** 11-03 |
@@ -22,18 +22,19 @@
 | makinacorpus/easydict | #54 | `update()` 遇「位置 dict + 关键字」时静默改写调用方入参 | open（11-06）64 doctest PASSED，等 CI/merge |
 | python-constraint/python-constraint | #116 | VariableMin/MaxSumConstraint 乘数估计写 `domains[var]*multiplier`（列表重复）→ float 崩溃 + 整型漏解 | open（11-06）测例 10 passed（229 套件无回归），等 CI/merge |
 | EntilZha/PyFunctional | #219 | `zip_with_next` 漏标 `PRE_COMPUTE` → 经 `map`/`filter` 等惰性变换后链式调用 `sequence[1:]` 对迭代器下标 → `TypeError` | open（11-06）回归测 +20 行（串行/并行），全套 311 passed / 3 skipped，等 CI/merge |
+| jsonpickle/jsonpickle | #648 | 对象同时有 `__dict__` 与 `__slots__` 时 slot 静默丢失（`_flatten_obj_instance` 只平铺其一）→ 沿 MRO 双平铺 | open（11-07）2 回归测，全套 465 passed（2 环境相关需 simplejson），等 CI/merge |
 
 ## 找 bug（详见总纲 §找 bug / §高命中漏洞模式）
 - **双轨**：①差异/往返 fuzz 证明核心没坏；②扫带复现的 open bug（真正产出 PR）。成熟库随机 fuzz 多是**干净负结果**，价值在证明清白，不是拿来开 PR。优先「**源码安全/正确性审计 + 真实用户影响**」而非扫 issue——3 个 merged 与 ludic #151 全来自此。
 - **先跑作者的 `__main__` 自测**，日志首行自相矛盾往往就是 bug。
 - **假阳性规律（最重要）**：每次「发现 bug」先问「是不是我 oracle 写错了」（累计十余次）。判据必须落在**目标函数体内用 AST**；字符串命中不算语义；守卫函数体内的合法写法不算残留；文档里的 `ghp_`/`AKIA` 前缀是说明文字不是泄露。**本轮两个新坑**：①`count`-类 API 可能只收 bool（数 0/1 位）而非子串搜索——按子串建 oracle 必误判；②find/split 的 oracle 边界：针必须完整落在 [start,end) 内（合法首位=end-n），且 split 用 `str(p)` 比对会因 bitstring 自动 hex/bin 显示（`0x8`→`'8'`）串味。**统一改用 `.bin` 属性 / 合法边界公式做 oracle**。
 - **干净审计台账（不硬凑放弃）**：tldextract（170k PSL 差分 0 发散）、bitstring 5.0（slice 40k + 取值 180k + find 族 40k + Array.count 20k + split 30k 全 0 发散，tibs C 核心）。
-- **高命中漏洞模式**（详见总纲，含 commit/PR）：验签未绑定载荷 `597cabe`；兄弟实现漏同步 `4760fa9`；跨仓同源修复不传播 `eb74b0a`；`get(k,0)` 哨兵参与比较 `7caa0d8`；`max(lo,min(hi,x))` 非 NaN-safe `8ba090c`；累加器收非有限值永久中毒；自报 ID 做去重键可绕过；强制门误报比漏报更糟；**按内容挑分隔符**必被击穿（ludic #151）；**变换漏标 `PRE_COMPUTE`**（PyFunctional #219：下标类 `sequence[1:]` 必崩，同族新函数必查）。
+- **高命中漏洞模式**（详见总纲，含 commit/PR）：验签未绑定载荷 `597cabe`；兄弟实现漏同步 `4760fa9`；跨仓同源修复不传播 `eb74b0a`；`get(k,0)` 哨兵参与比较 `7caa0d8`；`max(lo,min(hi,x))` 非 NaN-safe `8ba090c`；累加器收非有限值永久中毒；自报 ID 做去重键可绕过；强制门误报比漏报更糟；**按内容挑分隔符**必被击穿（ludic #151）；**变换漏标 `PRE_COMPUTE`**（PyFunctional #219：下标类 `sequence[1:]` 必崩，同族新函数必查）；**`__dict__` 与 `__slots__` 共存**（jsonpickle #648：pickler 只平铺其一→slot 静默丢失，需沿 MRO 双平铺）。
 - **判重三连**：issue 列表 + open PR + **closed PR / issue timeline**；三条件=同文件+同函数+同语义，必须 diff 补丁。Box 证明「open PR 少」≠「没人做过」，babel 证明「issue 漂亮」≠「没被抢」。
 
 ## 选靶与政策（详见总纲 §选靶与政策）
 - **三信号缺一不可**：openPR 低 + 明确接受外部 PR + 纯逻辑可离线复现。**低 openPR 只是「值得去读政策」的提示**：三种成因=拒外部贡献（openai-agents-python / python-socketio）、维护者合并极快（Box）、主动清理 agent PR（tinycss2）。反例 `getludic/ludic`（0 PR 但明确欢迎）。**决定性变量是 CONTRIBUTING 原文，不是 PR 数**。
-- **政策读全文、多路径**：`.md` / `.github/` / **`.rst`**（reader 的政策在 `CONTRIBUTING.rst`，只查 .md 会漏）/ `docs/` / 无扩展名；还要读 CoC（CourtBouillon 要求真实场景、先问后发代码、一次一个 PR）。其他门槛：python-sdk 需指派、graphiti 要 RFC+AI 披露、ruyi 需 DCO。
+- **政策读全文、多路径**：`.md` / `.github/` / **`.rst`**（reader 的政策在 `CONTRIBUTING.rst`，只查 .md 会漏）/ `docs/` / 无扩展名 / **`.github/PULL_REQUEST_TEMPLATE.md`**（jsonpickle 的 AI 披露制就藏这里，不在 CONTRIBUTING，开 PR 前必查）；还要读 CoC（CourtBouillon 要求真实场景、先问后发代码、一次一个 PR）。其他门槛：python-sdk 需指派、graphiti 要 RFC+AI 披露、ruyi 需 DCO。
 - **AI 贡献禁令比拥挤度更前置**，必须**选靶阶段一票否决**（`AI_BAN→EXCLUDE`）；事后复核只能提前知道，不能挽回。
 - **第四类假靶**：maintainer 只接受特定类型修复（`tkem/cachetools` 拒「用户输入错误」类、收「库自身状态损坏」类）→ 必须读 PR/issue 的**关闭评论**判断口味。
 - **红海**：热门纯 Python 库小修窗口被 agent 洪流淹没；AI 生态更卷（agno 989 / livekit 635…）。**全局排序搜索已被模板生成仓污染**，须从可信库清单 + 结构化 `/repos/X/issues?labels=bug` 出发。
@@ -44,6 +45,11 @@
 - maintainer 11-05 关闭 #429，说的是 "Co-authored-by: TrueFurina Agent"；**查原始 commit 更正**：并无该 trailer，真实触发点是 **author/committer = `TrueFurina Agent <agent@truefurina.local>`**，其余 PR 的 author 均为干净的 `Dream`。codecov 显示改动行全覆盖，**技术质量不是被拒原因**。
 - → 开 PR 前必须查**提交元数据**（name+email+trailer），不能只扫 message 正文；**对明确拒绝不得重试**：不重开、不申诉、不换号、不再在该仓发任何内容。
 - **诚实评级**：提前 1 天识别出唯一风险（判断正确），但按「不撤回、不催、等对方判断」口径未主动撤回，最终由对方关闭。合理且可接受，不包装成胜利。详见 `workbench/docs/已开PR贡献政策合规复核-2026-11-04.md` §6。
+
+## jsonpickle #648 结案（合规口径）
+- bug：对象同时拥有 `__dict__` 与 `__slots__`（子类给带 `__dict__` 的基类加 slot / `__slots__` 含 `__dict__`）时，slot 属性 round-trip 静默丢失。根因 `pickler._flatten_obj_instance`：`has_slots = not has_dict and hasattr(...)` + `has_dict` 分支早 return。修复：沿 MRO 把 `__slots__` 与 `__dict__` 一起平铺（slot 作为普通属性还原）。
+- 判重：解决 #306（2020 关闭、timeline 无关联 PR/commit、仍复现于 5.0.0）→ **非撞车，是真正补齐**；判重三连确认无既有修复。
+- AI 政策 = **披露制（非禁令）**，藏在 `.github/PULL_REQUEST_TEMPLATE.md`（不在 CONTRIBUTING）：每个用 AI 的 commit 需 `Co-authored-by: LLM` footer、AI 代码 ≤50 行（不含测试/文档）、保留 checklist。**commit author/committer 仍是干净 `Dream <2468001320@qq.com>`**，只加项目硬性要求的 LLM co-author（非 agent 身份 trailer；与 reader #429 区分：那次是 author 名带 `Agent` 触发拒收，这次 author 干净）。
 
 ## 工具链（`_notes/workbench/tools/`）
 | 阶段 | 工具 | 作用 |
