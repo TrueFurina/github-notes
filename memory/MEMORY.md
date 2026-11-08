@@ -9,10 +9,10 @@
 - 用户口径：**先做好自己的事，不催 maintainer**；真 bug 就干净地修、带测试、开 PR、然后等。**质量与诚实 > 数量与合并率，不硬凑**（红海撞车或需设计决策一律放弃）。
 - 学校机器关机即重置 → 结论/产物**先推 `TrueFurina/github-notes` 再落本机**；本机 `.workbuddy-ai/memory/` 逐字备份在 `github-notes/memory/`。
 
-## 已开 PR（15 个；11-07：3 merged / 1 判重关闭 / 1 AI 政策关闭 / 10 open 等 CI，本场不催）
+## 已开 PR（15 个；11-07：3 merged / 1 判重关闭 / 2 AI 关闭(reader #429 明文政策 + configobj #293 无政策被视检判 AI slop) / 9 open 等 CI，本场不催）
 完整表见总纲。要点：`agent-memory` #118/119/120 **merged**；`croniter` #287 判重关闭；
-**`reader` #429 因 AI 政策被 maintainer 关闭**（见下）；其余 10 个 open 等 CI，一律不动、不催。
-近期：`jsonpickle` #648（`__dict__`+`__slots__` slot 丢失）、`configobj` #293（`list_values=False` 空串数据损坏）、
+**`reader` #429 因 AI 政策被 maintainer 关闭**；**`configobj` #293 无书面 AI 政策、身份干净、无 agent trailer，仍被 maintainer(jelmer) 视检判「AI slop」关闭**（见下）——两例都是真 bug 干净修但被 AI 身份/指纹拒，**明确拒绝不重试**。其余 9 个 open 等 CI，一律不动、不催。
+近期：`jsonpickle` #648（`__dict__`+`__slots__` slot 丢失，披露制 AI 政策下仍 open）、`configobj` #293（`list_values=False` 空串数据损坏，已因 AI slop 被关）、
 `PyFunctional` #219（`PRE_COMPUTE`）、`easydict` #54、`voluptuous` #569、`boltons` #735。
 
 ## 找 bug（详见总纲 §找 bug）
@@ -26,7 +26,7 @@
 ## 选靶与政策（详见总纲 §选靶与政策）
 - **三信号缺一不可**：openPR 低 + 明确接受外部 PR + 纯逻辑可离线复现。**低 openPR 只是「值得去读政策」的提示**（拒外部贡献 / 合并极快 / 清理 agent PR）；反例 `getludic/ludic` 0 PR 但欢迎 → **决定性变量是 CONTRIBUTING 原文**。
 - **政策读全文、多路径**：`.md` / `.github/` / **`.rst`**（reader 在此）/ `docs/` / 无扩展名 / **`.github/PULL_REQUEST_TEMPLATE.md`**（jsonpickle 的 AI 披露制藏这里）；还要读 CoC（真实场景、先问后发代码、一次一个 PR）。门槛：python-sdk 需指派、graphiti RFC+AI 披露、ruyi DCO。
-- **★ AI 贡献禁令比拥挤度更前置**，必须**选靶阶段一票否决**（`AI_BAN→EXCLUDE`）；事后复核只能提前知道，不能挽回。
+- **★ AI 贡献禁令比拥挤度更前置**，必须**选靶阶段一票否决**（`AI_BAN→EXCLUDE`）；事后复核只能提前知道，不能挽回。**扩展（configobj #293 教训）**：不仅查书面政策——「无政策」也≠安全，maintainer 可能凭行文/commit 指纹视检判 AI 拒收（jelmer 的「AI slop」）。信号源扩展：查该 maintainer 近期 closed PR 是否有 AI 拒收、是否公开反 AI。**优先选明文披露制（jsonpickle 类）**——已 opt-in 接受，最稳。此类被拒与 reader #429 同属「明确拒绝，不重试/不申诉/不换号」。
 - **第四类假靶**：maintainer 只收特定类型修复（`tkem/cachetools` 拒「用户输入错误」、收「库自身状态损坏」）→ 必须读**关闭评论**判断口味。
 - **红海**：热门纯 Python 库小修窗口被 agent 洪流淹没；**全局排序搜索已被模板生成仓污染**，须从可信库清单 + 结构化 `/repos/X/issues?labels=bug` 出发。
 - **改向（11-07）**：①优先 closed-without-fix issue（jsonpickle #306 路径）；②差异/往返 fuzz 找**未上报** bug；③更 niche(<1k★)。**不再对「open issue 且已有关联 PR」投入**。
@@ -35,7 +35,7 @@
 ## 结案口径（详见总纲 / `已开PR贡献政策合规复核-2026-11-04.md`）
 - **`reader` #429**：`CONTRIBUTING.rst` 禁止 LLM 生成内容（含 PR/issue/comment）。maintainer 11-05 关闭；**查原始 commit 更正**：并无 `Co-authored-by` trailer，触发点是 **author/committer = `TrueFurina Agent <agent@truefurina.local>`**，其余 PR author 均为干净的 `Dream`。codecov 显示改动行全覆盖 → **技术质量不是被拒原因**。→ 开 PR 前必查提交元数据（name+email+trailer）；**明确拒绝不得重试**（不重开/申诉/换号/再发内容）。诚实评级：提前识别风险（判断正确），按口径未主动撤回，结果合理，不包装成胜利。
 - **`jsonpickle` #648**：AI 政策是**披露制**（藏在 PR_TEMPLATE 而非 CONTRIBUTING）——需 `Co-authored-by: LLM`、AI 代码 ≤50 行，author 仍干净 `Dream`。解决 #306（2020 关闭、无关联 PR）→ 非撞车，是补齐。
-- **`configobj` #293**：**先跑既有测试再定改法**——无脑反引号会红掉「非空引号须保留」的既有断言；最终只对空引号反引号（66 passed，唯一失败是 Windows-only 预存在）。无 CONTRIBUTING → 不写 AI trailer。
+- **`configobj` #293（已关闭，AI slop）**：真 bug（`list_values=False` 下空串 `""` 读回为字面 `'""'`，#242）→ 干净修（只对空引号反引号，保留非空引号 raw 模式）+ 回归测，66 passed（唯一失败 Windows-only 预存在）。**无 CONTRIBUTING/PR 模板/README 提及 AI → 选靶阶段未排除**。PR 开出去后 maintainer(jelmer) 直接 close 并留言「AI slop」——**视检即判 AI 生成，与是否带 trailer/身份干净无关**。教训：① 无书面政策的库 ≠ 安全，maintainer 可能凭 PR 行文/commit 风格指纹拒 AI；② 此类「无政策但 maintainer 反 AI」应视同 AI_BAN 一票否决，信号来源从文本变为 maintainer 口碑/历史；③ 优先选**明文披露制**的库（如 jsonpickle，已 opt-in 接受 AI），比「无政策」更安全。**诚实评级：干净工程、真实 bug，但被拒，非胜利，不重试。**
 
 ## 工具链（`_notes/workbench/tools/`，详见 `SESSION_PROTOCOL.md`）
 | 阶段 | 工具 | 一句话 |
