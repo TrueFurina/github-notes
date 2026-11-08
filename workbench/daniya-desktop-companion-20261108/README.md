@@ -59,6 +59,13 @@ cp config.release.yaml config.yaml     # 出厂模板；源码仓版多为 ${VAR
 3 个 WARN 分别是：`config.yaml` 是出厂默认值但 `data/` 有使用痕迹 / `Uninstall.exe` 无内嵌签名 /
 主聊天与视觉模型未填 `api_key`。软件正在运行时会多一条「端口被占用」WARN，属正常，无需处理。
 
+> ⚠️ **用对解释器**：必须用**包内** `python/python.exe` 跑 `main.py` / `--doctor`，不要用系统 python。
+> 若用系统 python 跑 `--doctor`，会看到误导性 FAIL（「核心依赖缺失」「语音坏了」「唤醒词退化」）——
+> 那些只是该解释器没装包依赖的假象，**包内解释器里全是好的**。为此 `main.py` 的 `--doctor`
+> 截获块内置了**解释器守卫**（2026-11-08）：检测到交付包存在 `python/python.exe` 但当前用的不是它，
+> 就在 doctor 真结果前打一段醒目提示（列出假象、给出正确的重跑命令），**不阻止运行、不改退出码**。
+> 实测：系统 python 跑 → 打提示 + 4 个误导 FAIL；包内 python 跑 → 无提示、干净 16-3-0。双向验证通过。
+
 其他入口：`--no-gui` 只起控制台、`--pet-backend {auto,webview,shell}` 指定桌面壳、
 `--config <path>` 换配置文件、`run_webui.py` 单开角色管理界面。
 
