@@ -1,0 +1,264 @@
+--- a/marlsrc/cooperation_detector.py
++++ b/marlsrc/cooperation_detector.py
+@@ -24,6 +24,16 @@
+     - 默认规则基模式不变（完全向后兼容）
+     - 可训练 sklearn 分类器（train_classifier），并用 predict_ml 做补充判定
+     """
++
++    # ── D-4 修复（2026-11-05 运行时审计发现）：合作距离阈值提取为类级常量 ──
++    # 原实现：detect_cooperation() 方法签名默认参数 cooperation_threshold=0.5，
++    #   调用方不显式传值即静默使用 0.5，阈值口径分散在方法签名（调用方可覆盖）+ 
++    #   文档注释，无单一真源。改为类级常量后：
++    #   - 默认值与方法签名保持一致（0.5，对外口径零变化）
++    #   - 需调整阈值时改此处一处即可（或构造时传参覆盖）
++    #   - 语义关系：cooperation_threshold (0.5) > COVERAGE_THRESHOLD (0.15)，
++    #     「靠近」判定比「精确覆盖」更宽松（见 simple_spread.py P2-11 注释）
++    COOPERATION_THRESHOLD: float = 0.5
+ 
+     def __init__(self, n_agents: int = 3, n_landmarks: int = 3, verify_gate=None):
+         self.n_agents = n_agents
+@@ -105,7 +115,7 @@
+         self,
+         observations: List[Any],
+         agent_ids: List[str],
+-        cooperation_threshold: float = 0.5,
++        cooperation_threshold: Optional[float] = None,
+         selfish_flags: Optional[List[bool]] = None,
+         behavioral_only: bool = False,
+     ) -> Dict[str, Optional[bool]]:
+@@ -135,6 +145,9 @@
+         """
+         import numpy as np
+         step_status: Dict[str, Optional[bool]] = {}
++        # D-4：签名默认 None，此处兜底到类级常量（既允许调用方覆盖，又保持单一真源）
++        if cooperation_threshold is None:
++            cooperation_threshold = self.COOPERATION_THRESHOLD
+         sf = selfish_flags if selfish_flags else [False] * len(agent_ids)
+ 
+         # ── 布局门（fail-closed）：不认识观测长度就不算距离 ──
+@@ -208,13 +221,32 @@
+         - 合作步数 > 30% → 合作（宽松阈值）
+         - 背叛步数 > 50% → 背叛（严格阈值，仅 selfish 模式产生 False）
+         - bc_marl 模式下不会产生真正背叛，中性不判背叛
++
++        D-8 修复（2026-11-05 运行时验证发现）：
++        原实现只读 _episode_coop['betray']，完全忽略 _episode_betray。
++        _episode_betray 在布局门失败时是唯一写入点（记录 selfish_flags），
++        但从未被结算层读取——selfish 标记进得去、惩罚永远出不来，
++        惩罚自私这条合约核心语义在布局不匹配场景静默失效。
++
++        现改为合并两条通道取最大值：
++          - 行为层：_episode_coop['betray'] / total
++          - 标记层：_episode_betray[agent_id] / total
++        任一超阈值即判背叛，两条通道语义互补、无双重计数
++        （布局门通过时两者可能同时记，取最大不放大）。
+         """
+         stats = self._episode_coop.get(
+             agent_id, {'coop': 0, 'betray': 0, 'total': 0}
+         )
+         total = max(1, stats['total'])
+         coop_rate = stats['coop'] / total
+-        betray_rate = stats['betray'] / total
++
++        # 双通道取最大：行为层背叛率 vs 标记层背叛率
++        behavior_betray_rate = stats['betray'] / total
++        flag_betray_rate = (
++            self._episode_betray.get(agent_id, 0) / total
++            if total > 0 else 0.0
++        )
++        betray_rate = max(behavior_betray_rate, flag_betray_rate)
+ 
+         did_cooperate = coop_rate > 0.3
+         did_betray = betray_rate > 0.5
+--- a/marlsrc/rl_lambda.py
++++ b/marlsrc/rl_lambda.py
+@@ -187,7 +187,14 @@
+             sc, tc = consensus_stats.get('success_count', 0), consensus_stats.get('total_rounds', 0)
+             success_rate = sc / tc if tc > 0 else 0.5
+         coop_stats = bridge_stats.get('detector_stats') or {}
+-        coop_rate = coop_stats.get('cooperation_rate', 0.5)
++        # D-9 修复（2026-11-05 运行时验证发现）：bridge_stats 顶层已有真实合作率
++        # 'cooperation_rate'（由 bc_integration.py:315 注入，取自 CooperationDetector
++        # 判定），但此方法读的是 'detector_stats' 子字典——该键在 bridge_stats 中
++        # 从不存在，导致合作反馈恒落空为默认 0.5，与 F01 修复（adaptive_lambda.py:265）
++        # 的口径分裂。现优先读顶层 'cooperation_rate'，与 adaptive_lambda 完全一致。
++        coop_rate = bridge_stats.get('cooperation_rate')
++        if coop_rate is None:
++            coop_rate = coop_stats.get('cooperation_rate', 0.5)
+         sec_stats = bridge_stats.get('security_stats') or {}
+         sec_pass, sec_fail = sec_stats.get('pass_count', 0), sec_stats.get('fail_count', 0)
+         total = sec_pass + sec_fail
+--- a/marlsrc/incentive_contract.py
++++ b/marlsrc/incentive_contract.py
+@@ -1,19 +1,76 @@
+ """
+ 激励结算智能合约
+ 核心功能：
+-1. 多维度贡献度量化：任务完成度(40%) + 协作贡献度(35%) + 行为合规性(25%)
++1. 多维度贡献度量化：任务完成度(κ_task) + 协作贡献度(κ_coop) + 行为合规性(κ_compliance)
+ 2. 自动化激励结算：基础奖励 + 贡献加成 + 背叛惩罚
+ 3. 数学上保证「诚实合作期望收益 > 背叛期望收益」
+ 
+ 链接MARL双向协同：
+ total_reward = env_reward + λ * bc_score
+ """
++import json
+ import logging
++from pathlib import Path
+ from typing import Dict, List, Optional, Tuple
+ 
+ from ..ledger.world_state import WorldState, AgentStatus
+ 
+ logger = logging.getLogger(__name__)
++
++# ---------------------------------------------------------------------------
++# D-5 修复（2026-11-05 运行时审计发现）：κ 三元组从 config.json 加载
++#
++# 原实现：weighted_score 属性内联 0.40/0.35/0.25，与 cw_pbft.py 的
++# _KAPPA_TASK/_KAPPA_COOP/_KAPPA_COMPLIANCE 各自维护一份——改一处忘另一处即口径漂移。
++# 现改为与本文件 _CONFIG_PATH 指向的 config.json 同源加载，缺失/不自洽时回退
++# 默认值（与 cw_pbft.py 兜底值逐值一致，对外口径零变化）。
++# ---------------------------------------------------------------------------
++_CONFIG_PATH: Path = Path(__file__).resolve().parent.parent.parent / "config.json"
++_KAPPA_DEFAULTS: Dict[str, float] = {
++    'task_score': 0.40,
++    'cooperation_score': 0.35,
++    'compliance_score': 0.25,
++}
++
++
++def _load_contribution_weights() -> Tuple[float, float, float]:
++    """从 config.json 读取 κ 三元组，缺失或非法时回退默认值。
++
++    校验 Shapley 归一约束 κ_task + κ_coop + κ_compliance = 1；不满足则整体回退
++    默认值并告警（fail-safe：宁可用已知正确的常量，也不用一份不自洽的配置）。
++
++    与 cw_pbft._load_contribution_weights() 同一逻辑、同一配置源，
++    两处同步更新（D-5 修复目标：消除内联硬编码漂移风险）。
++
++    :return: (κ_task, κ_coop, κ_compliance)
++    """
++    try:
++        if _CONFIG_PATH.exists():
++            with open(_CONFIG_PATH, 'r', encoding='utf-8') as f:
++                cfg = json.load(f)
++            cw = cfg.get('blockchain', {}).get('contribution_weights', {})
++            k_task = float(cw.get('task_score', _KAPPA_DEFAULTS['task_score']))
++            k_coop = float(cw.get('cooperation_score', _KAPPA_DEFAULTS['cooperation_score']))
++            k_comp = float(cw.get('compliance_score', _KAPPA_DEFAULTS['compliance_score']))
++            if abs(k_task + k_coop + k_comp - 1.0) < 1e-6:
++                return (k_task, k_coop, k_comp)
++            logger.warning(
++                f"[IncentiveContract] config.json contribution_weights 之和 "
++                f"={k_task + k_coop + k_comp:.6f} ≠ 1，回退默认值 {_KAPPA_DEFAULTS}"
++            )
++    except Exception as e:
++        logger.warning(
++            f"[IncentiveContract] 加载 config.json contribution_weights 失败: {e}，"
++            f"回退默认值 {_KAPPA_DEFAULTS}"
++        )
++    return (
++        _KAPPA_DEFAULTS['task_score'],
++        _KAPPA_DEFAULTS['cooperation_score'],
++        _KAPPA_DEFAULTS['compliance_score'],
++    )
++
++
++_KAPPA_TASK, _KAPPA_COOP, _KAPPA_COMPLIANCE = _load_contribution_weights()
+ 
+ 
+ class ContributionScore:
+@@ -41,11 +98,15 @@
+ 
+         约束：κ_task + κ_coop + κ_compliance = 1
+         实验校准：σ(task_variance)≈0.1, φ(coop_externality)≈0.05
++
++        D-5 修复：κ 三元组不再内联，改用模块级 _KAPPA_TASK/_KAPPA_COOP/
++        _KAPPA_COMPLIANCE（从 config.json 加载，与 cw_pbft.py 同源），
++        消除两处独立副本的漂移风险。对外口径默认值不变（0.40/0.35/0.25）。
+         """
+         return (
+-            0.40 * self.task_score +
+-            0.35 * self.cooperation_score +
+-            0.25 * self.compliance_score
++            _KAPPA_TASK * self.task_score +
++            _KAPPA_COOP * self.cooperation_score +
++            _KAPPA_COMPLIANCE * self.compliance_score
+         )
+ 
+ 
+--- a/marlsrc/qmix.py
++++ b/marlsrc/qmix.py
+@@ -14,6 +14,7 @@
+ 
+ import logging
+ 
++import zlib
+ from collections import deque
+ 
+ from typing import List, Tuple, Optional, Dict
+@@ -1212,7 +1213,11 @@
+ 
+             # 简易Q表查表策略（比纯随机略好）
+ 
+-            state_idx = int(abs(hash(str(obs.tolist() if hasattr(obs, 'tolist') else obs))) % self.hidden_dim)
++            # D-11 修复（2026-11-05 审计）：改用 zlib.crc32 稳定哈希。
++            # 原实现用内置 hash()，Python3 对 str 启用 HASH 随机化（PYTHONHASHSEED），
++            # 每次进程启动种子不同 → 同一观测映射到不同 state_idx，NumPy 回退版训练
++            # 连自身都无法跨进程复现。crc32 返回无符号稳定整数，跨进程一致。
++            state_idx = int(zlib.crc32(str(obs.tolist() if hasattr(obs, 'tolist') else obs).encode('utf-8')) % self.hidden_dim)
+ 
+             return int(np.argmax(self._q_table[state_idx])), hidden
+ 
+@@ -1222,9 +1227,10 @@
+ 
+             """简易Q-learning更新（单步更新）"""
+ 
+-            state_idx = int(abs(hash(str(obs.tolist() if hasattr(obs, 'tolist') else obs))) % self.hidden_dim)
+-
+-            next_state_idx = int(abs(hash(str(next_obs.tolist() if hasattr(next_obs, 'tolist') else next_obs))) % self.hidden_dim)
++            # D-11：同 get_action，改用 crc32 稳定哈希
++            state_idx = int(zlib.crc32(str(obs.tolist() if hasattr(obs, 'tolist') else obs).encode('utf-8')) % self.hidden_dim)
++
++            next_state_idx = int(zlib.crc32(str(next_obs.tolist() if hasattr(next_obs, 'tolist') else next_obs).encode('utf-8')) % self.hidden_dim)
+ 
+             td_target = reward + (0 if done else gamma * np.max(self._q_table[next_state_idx]))
+ 
+--- a/marlsrc/consensus_shaper.py
++++ b/marlsrc/consensus_shaper.py
+@@ -29,6 +29,15 @@
+ import numpy as np
+ 
+ logger = logging.getLogger(__name__)
++
++# D-2 修复（2026-11-05 审计）：合作距离阈值提取为模块级常量，消除内联硬编码。
++# 原 `_detect_cooperation()` 方法签名默认 cooperation_threshold=0.5，与
++# CooperationDetector.detect_cooperation 的 0.5（D-4 修复处）是同一口径的
++# 两处独立副本。本模块优先使用 Bridge 注入的权威 cooperation_status（见
++# shape_reward），此内部检测仅为无 Bridge 状态时的 fallback。
++# 语义关系：cooperation_threshold (0.5) > COVERAGE_THRESHOLD (0.15)，
++# 「靠近」判定比「精确覆盖」更宽松（见 simple_spread.py P2-11 注释）。
++COOPERATION_THRESHOLD: float = 0.5
+ 
+ 
+ class ConsensusRewardShaper:
+@@ -139,12 +148,17 @@
+         self,
+         observations: List[np.ndarray],
+         actions: List[int],
+-        cooperation_threshold: float = 0.5,
++        cooperation_threshold: Optional[float] = None,
+     ) -> List[bool]:
+         """
+         检测每个智能体是否采取合作行为
+         合作定义：智能体接近其分配的路标（距离 < threshold）
+-        """
++
++        D-2：签名默认 None，此处兜底到模块级 COOPERATION_THRESHOLD，
++        与 CooperationDetector（D-4 修复处）保持同一单一真源口径。
++        """
++        if cooperation_threshold is None:
++            cooperation_threshold = COOPERATION_THRESHOLD
+         coop_flags = []
+         for i in range(self.n_agents):
+             is_coop = False
