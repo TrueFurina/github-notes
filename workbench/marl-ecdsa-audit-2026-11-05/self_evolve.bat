@@ -1,9 +1,9 @@
 @echo off
+chcp 65001 >nul
 REM marl-ecdsa self-evolve watch wrapper (hourly, read-only)
 set PY=C:\Users\Administrator\.office-raccoon\agent\box-agent-runtime\runtime\python\python.exe
 set DIR=C:\Users\Administrator\RaccoonWork\self-evolve
 set LOG=%DIR%\watch.log
-chcp 65001 >nul
 set PYTHONIOENCODING=utf-8
 
 echo. >> "%LOG%"
