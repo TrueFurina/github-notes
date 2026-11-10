@@ -1166,3 +1166,13 @@ ruff `All checks passed`，与 R55 改后基线 `diff` 空；行尾 CRLF=0 / 185
 - 验证：后端 971/32/0（**test_solve_all_is_reproducible 为既有 flaky，单独连跑 2/3 失败，与 R93 无关**）；ruff 全量 0；变异 118/118（M117/M118 均 KILLED）；reschedule.py 纯 CRLF（2258 行）未破。
 - 插曲：① 重构误删 M44 锚点所在的 `if store is None and consume_corrupt_flag():` 原行 → 已恢复（版本判断改 `elif`，保留 M44 守卫）；② ruff 全量 lint 抓到未导入的 `SCHEMA_VERSION` → 改 `master_store.SCHEMA_VERSION`；③ M118 锚点缩进 20→16 空格对齐实际行；④ 误用脚本把 mutation_check.py 翻成 CRLF → 还原 LF 并补推 `c0cd8c32b2`。
 - 代码 `42fad760e6`（父 `ec0d16d0b9`），LF 还原 `c0cd8c32b2`。全程只读+仅追加，未删任何文件。
+
+## R94 · 2026-11-10 06:36 · 聊天族 LLM 失败结构化（用户授权方向，不做模块拆分）
+
+- 根因：`reschedule_agent.process_request` 的 `with_ai` 块调用 `llm_parser.suggest_plans` 后只 `.get("plans", [])`，把 `{"error": ...}` 丢掉；异常走 `except Exception: ai_plans=[]` 一吞了之。LLM 已配置但失败时静默降级成规则推荐、`ai_plans_source` 仍报 "rule"，与 R88–R93 静默降级家族同族。
+- 修法：新增 `llm_error` / `llm_error_detail` 结构化信号，只在「LLM 已配置且真正调用失败」时置位；fast 模式 / 未配置（离线常态）保持 False/None 不误报。降级仍发生（预期）但带信号，且绝不标成 "llm"。5 个返回分支全补齐（R32 契约）+ `/chat` data dict 白名单透传。
+- 5 文件：`reschedule_agent.py`（with_ai 块 + 5 分支 + `_need_info` 参数化）、`reschedule.py`（/chat 透传）、`test_response_contract.py`（CONTRACT_KEYS 补 2 键）、`mutation_check.py`（M30 锚点同步 + M119/M120）、新增 `test_chat_llm_error_signal.py`（5 测）。
+- 踩坑（规则 19 命中）：`_need_info` 是独立方法拿不到 `process_request` 局部 `llm_error` → 首次本地 NameError，改参数化（默认 False/None，追问发生在 LLM 尝试之前）；改签名又打瞎 M30 锚点 → 全量 120 条静态验抓出并同步 old 到新源码，保留「追问退回 8 键」语义。
+- 验证：后端 975 passed / 32 skipped / 1 deselected(既有 flaky) / 0 failed；ruff 全量 0；变异 120/120 检出、SKIP 0、超时 0（M30/M119/M120 均检出）；覆盖率 4517/4856=93.0%（--fail-under 80 --fail-zero exit 0，R90 基线 92.7%）；前端 tsc 0 + 26 文件/188 Tests；README 守卫 4 passed（10% 容差，无需改文档）。行尾：reschedule_agent.py 754 / reschedule.py 2263 纯 CRLF，3 测试文件纯 LF。变异后 MUTANT 残留 0、auto_scheduler.py sha1 `9bdd7b93…`、5 文件字节还原一致。
+- 代码 `d859329513`（父 `c0cd8c32b2`），5 blob sha 与 DryRun 全 MATCH，tree 318 条无截断。CI run `42712835087` = completed/success，逐 job 逐 step（backend ruff/审计/Pytest、frontend tsc+vitest、coverage gate）全绿。
+- 机器重置又把根 `*.md` 清零（根 md 计数 0），台账实体在 `_notes/workbench/docs/ROUND_LOG_续2.md`；私有笔记仓库按相对路径备份，不覆盖 canonical。全程只读+仅追加，未删任何文件。
